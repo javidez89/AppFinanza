@@ -16,16 +16,15 @@ El repositorio estaba vacío: no existían aplicación, dependencias, configurac
 
 ## Problemas y deuda técnica
 
-- Supabase aún necesita credenciales del proyecto, OAuth de Google, migración aplicada y revisión Security Advisor.
+- Google OAuth necesita un Client ID y Client Secret válidos en Supabase; el proveedor continúa deshabilitado hasta entonces.
 - Las operaciones de negocio del cliente importado aún deben migrarse progresivamente a RPC atómicas para préstamos, redenciones, pagos de tarjeta/deuda y transferencias.
 - Falta probar el flujo completo con los dos usuarios autorizados, conexión lenta y datos reales.
-- Falta configurar las variables públicas del repositorio para que GitHub Actions incruste la URL y publishable key de Supabase durante el build.
+- Las variables públicas del repositorio, GitHub Pages, la migración y las URL de redirección ya están configuradas. Security Advisor no reportó hallazgos.
 
 ## Fases siguientes
 
-1. Aplicar la migración y ejecutar Security Advisors en el proyecto Supabase.
-2. Configurar Google OAuth, URL de producción y redirect URLs.
-3. Configurar variables de GitHub Actions, publicar Pages y probar instalación PWA.
+1. Configurar Google OAuth con un cliente web de Google Cloud y probar el retorno a Pages.
+2. Probar el acceso de los dos usuarios autorizados, RLS e instalación PWA.
 4. Migrar operaciones financieras críticas a RPC atómicas y agregar pruebas de integración de RLS.
 5. Realizar QA de permisos, errores, accesibilidad, responsive y datos reales.
 

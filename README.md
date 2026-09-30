@@ -14,12 +14,13 @@ Comandos de calidad: `npm run lint`, `npm run typecheck`, `npm test` y `npm run 
 
 El frontend se exporta como contenido estático en `out/`. El flujo de `.github/workflows/deploy-pages.yml` valida el código y publica esa carpeta desde `master` en `https://javidez89.github.io/AppFinanza/`.
 
-Para activar el despliegue:
+Configuración de producción:
 
-1. En GitHub, **Settings → Pages → Build and deployment**, selecciona **GitHub Actions**.
-2. En **Settings → Secrets and variables → Actions → Variables**, crea `NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` del proyecto Supabase `AppFinanza`. Son valores públicos; nunca uses `service_role`.
-3. En Supabase **Authentication → URL Configuration**, establece **Site URL** en `https://javidez89.github.io/AppFinanza/` y agrega `https://javidez89.github.io/AppFinanza/auth/callback/` a **Redirect URLs**. En Google Cloud, el URI autorizado de redirección debe ser el callback de Supabase (`https://<project-ref>.supabase.co/auth/v1/callback`), no la URL de Pages.
-4. Reanuda el proyecto Supabase `AppFinanza` si está inactivo y confirma que Google OAuth y las políticas RLS están configurados. La aplicación no podrá iniciar sesión ni consultar datos mientras el proyecto esté inactivo.
-5. Publica los cambios en `master`. El flujo se ejecutará automáticamente.
+1. En GitHub, **Settings → Pages → Build and deployment**, está seleccionado **GitHub Actions**. El flujo de despliegue ya se ejecutó correctamente.
+2. Las variables `NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` están configuradas en **Settings → Secrets and variables → Actions → Variables**. Son valores públicos; nunca uses `service_role`.
+3. En Supabase **Authentication → URL Configuration**, la **Site URL** ya es `https://javidez89.github.io/AppFinanza/` y está autorizada `https://javidez89.github.io/AppFinanza/auth/callback/`.
+4. **Pendiente:** configura un cliente OAuth web en Google Cloud con URI de retorno `https://kmtkeigmjyldkxywxnpz.supabase.co/auth/v1/callback`. Copia su Client ID y Client Secret en Supabase **Authentication → Sign In / Providers → Google** y activa el proveedor. Nunca incluyas el Client Secret en el repositorio ni en variables `NEXT_PUBLIC_`.
+5. La migración inicial ya se aplicó a Supabase `AppFinanza`; las 14 tablas tienen RLS activo. Prueba el acceso con los dos correos autorizados cuando Google OAuth esté habilitado.
+6. Cada publicación en `master` ejecutará el flujo automáticamente.
 
 El build de Pages usa `NEXT_PUBLIC_BASE_PATH=/AppFinanza`. Para probar esa misma estructura localmente, configura esa variable antes de `npm run build`; para `npm run dev`, déjala vacía. Consulta `docs/SECURITY.md` y `docs/DATABASE.md` para el acceso a datos.
