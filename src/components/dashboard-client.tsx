@@ -7,7 +7,7 @@ import { ManagementPanel } from '@/components/management-panel'
 import { appPath } from '@/lib/app-path'
 
 type View = 'dashboard' | 'movements' | 'loans' | 'investments' | 'management'
-type Modal = null | 'income' | 'expense' | 'loan' | 'investment'
+type Modal = null | 'income' | 'expense' | 'edit-expense' | 'loan' | 'investment'
 
 type TransactionKind = 'income' | 'expense' | 'loan_out' | 'loan_payment' | 'investment_out' | 'investment_return' | 'debt_payment'
 
@@ -133,6 +133,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
   const supabase = useMemo(() => createClient(), [])
   const [view, setView] = useState<View>('dashboard')
   const [modal, setModal] = useState<Modal>(null)
+  const [editingExpense, setEditingExpense] = useState<Transaction | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
   const [loans, setLoans] = useState<Loan[]>([])
@@ -295,30 +296,55 @@ export function DashboardClient({ email, name }: { email: string; name: string }
   }
 
   async function saveMovement(kind: 'income' | 'expense') {
+    const expenseToEdit = modal === 'edit-expense' ? editingExpense : null
+    if (modal === 'edit-expense' && !expenseToEdit) return
     const amount = Number(movementForm.amount)
-    if (!movementForm.description.trim() || !amount || amount <= 0) {
-      notify('Escribe una descripción y un valor mayor que cero.')
+    if (!movementForm.description.trim() || !Number.isFinite(amount) || amount <= 0 || !movementForm.date) {
+      notify('Escribe una descripción, una fecha y un valor mayor que cero.')
       return
     }
     setSaving(true)
-    const { error } = await supabase.from('transactions').insert({
-      kind,
+    const values = {
       description: movementForm.description.trim(),
       category: movementForm.category,
       amount,
       transaction_date: movementForm.date,
       notes: movementForm.notes.trim() || null,
-      account_id: movementForm.accountId || accounts[0]?.id || null,
-    })
+      account_id: movementForm.accountId || (expenseToEdit ? null : accounts[0]?.id || null),
+    }
+    const { error } = expenseToEdit
+      ? await supabase.from('transactions').update(values).eq('id', expenseToEdit.id).eq('kind', 'expense').select('id').single()
+      : await supabase.from('transactions').insert({ ...values, kind })
     setSaving(false)
     if (error) {
       notify(error.message)
       return
     }
     setMovementForm({ description: '', amount: '', category: 'General', date: todayISO(), notes: '', accountId: '' })
+    setEditingExpense(null)
     setModal(null)
-    notify(kind === 'income' ? 'Ingreso registrado.' : 'Gasto registrado.')
+    notify(expenseToEdit ? 'Gasto actualizado.' : kind === 'income' ? 'Ingreso registrado.' : 'Gasto registrado.')
     await loadData()
+  }
+
+  function openNewMovement(kind: 'income' | 'expense') {
+    setEditingExpense(null)
+    setMovementForm({ description: '', amount: '', category: 'General', date: todayISO(), notes: '', accountId: '' })
+    setModal(kind)
+  }
+
+  function openEditExpense(transaction: Transaction) {
+    if (transaction.kind !== 'expense') return
+    setEditingExpense(transaction)
+    setMovementForm({
+      description: transaction.description,
+      amount: String(transaction.amount),
+      category: transaction.category,
+      date: transaction.transaction_date,
+      notes: transaction.notes || '',
+      accountId: transaction.account_id || '',
+    })
+    setModal('edit-expense')
   }
 
   async function saveLoan() {
@@ -544,8 +570,8 @@ export function DashboardClient({ email, name }: { email: string; name: string }
             <p>{view === 'dashboard' ? 'Una vista clara de tu dinero, cartera e inversiones.' : 'Información compartida entre los dos usuarios autorizados.'}</p>
           </div>
           <div className="top-actions">
-            <button className="button secondary" onClick={() => setModal('expense')}>+ Gasto</button>
-            <button className="button primary" onClick={() => setModal('income')}>+ Ingreso</button>
+            <button className="button secondary" onClick={() => openNewMovement('expense')}>+ Gasto</button>
+            <button className="button primary" onClick={() => openNewMovement('income')}>+ Ingreso</button>
           </div>
         </header>
 
@@ -608,8 +634,8 @@ export function DashboardClient({ email, name }: { email: string; name: string }
               <div className="panel">
                 <div className="panel-header"><div><h2>Acciones rápidas</h2><span>Registrar en segundos</span></div></div>
                 <div className="quick-list">
-                  <QuickAction initials="IN" title="Nuevo ingreso" text="Salario, venta, devolución…" onClick={() => setModal('income')} />
-                  <QuickAction initials="GA" title="Nuevo gasto" text="Compra, servicio, pago…" onClick={() => setModal('expense')} />
+                  <QuickAction initials="IN" title="Nuevo ingreso" text="Salario, venta, devolución…" onClick={() => openNewMovement('income')} />
+                  <QuickAction initials="GA" title="Nuevo gasto" text="Compra, servicio, pago…" onClick={() => openNewMovement('expense')} />
                   <QuickAction initials="PR" title="Prestar dinero" text="Cuotas e interés automático" onClick={() => setModal('loan')} />
                   <QuickAction initials="CD" title="Registrar CDT" text="Tasa E.A. y rendimiento" onClick={() => setModal('investment')} />
                 </div>
@@ -622,19 +648,20 @@ export function DashboardClient({ email, name }: { email: string; name: string }
           <section className="section">
             <div className="section-title">
               <div><h2>Todos los movimientos</h2><p>Incluye operaciones normales y movimientos automáticos de préstamos e inversiones.</p></div>
-              <div style={{ display: 'flex', gap: 8 }}><button className="button secondary" onClick={() => setModal('expense')}>+ Gasto</button><button className="button primary" onClick={() => setModal('income')}>+ Ingreso</button></div>
+              <div style={{ display: 'flex', gap: 8 }}><button className="button secondary" onClick={() => openNewMovement('expense')}>+ Gasto</button><button className="button primary" onClick={() => openNewMovement('income')}>+ Ingreso</button></div>
             </div>
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th>Categoría</th><th>Valor</th></tr></thead>
+                <thead><tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th>Categoría</th><th>Valor</th><th>Acciones</th></tr></thead>
                 <tbody>
-                  {transactions.length === 0 ? <tr><td colSpan={5} className="empty">Aún no hay movimientos.</td></tr> : transactions.map((tx) => (
+                  {transactions.length === 0 ? <tr><td colSpan={6} className="empty">Aún no hay movimientos.</td></tr> : transactions.map((tx) => (
                     <tr key={tx.id}>
                       <td>{shortDate(tx.transaction_date)}</td>
                       <td><span className={`badge ${isCashIn(tx.kind) ? 'paid' : 'pending'}`}>{kindMeta[tx.kind].label}</span></td>
                       <td><strong>{tx.description}</strong>{tx.notes ? <div className="sub">{tx.notes}</div> : null}</td>
                       <td>{tx.category}</td>
                       <td className={isCashIn(tx.kind) ? 'amount-positive' : 'amount-negative'}>{isCashIn(tx.kind) ? '+' : '-'} {formatCOP(tx.amount)}</td>
+                      <td>{tx.kind === 'expense' ? <button className="button secondary small" onClick={() => openEditExpense(tx)} aria-label={`Editar gasto: ${tx.description}`}>Editar</button> : null}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -712,17 +739,17 @@ export function DashboardClient({ email, name }: { email: string; name: string }
 
       <nav className="mobile-nav"><NavButtons mobile /></nav>
 
-      {modal === 'income' || modal === 'expense' ? (
-        <ModalShell title={modal === 'income' ? 'Registrar ingreso' : 'Registrar gasto'} onClose={() => setModal(null)}>
+      {modal === 'income' || modal === 'expense' || modal === 'edit-expense' ? (
+        <ModalShell title={modal === 'income' ? 'Registrar ingreso' : modal === 'edit-expense' ? 'Editar gasto' : 'Registrar gasto'} onClose={() => setModal(null)}>
           <div className="form-grid">
             <Field label="Descripción" full><input autoFocus value={movementForm.description} onChange={(e) => setMovementForm((form) => ({ ...form, description: e.target.value }))} placeholder={modal === 'income' ? 'Ej. Pago de salario' : 'Ej. Mercado del mes'} /></Field>
             <Field label="Valor"><input type="number" min="0" inputMode="decimal" value={movementForm.amount} onChange={(e) => setMovementForm((form) => ({ ...form, amount: e.target.value }))} placeholder="0" /></Field>
             <Field label="Fecha"><input type="date" value={movementForm.date} onChange={(e) => setMovementForm((form) => ({ ...form, date: e.target.value }))} /></Field>
             <Field label="Categoría"><select value={movementForm.category} onChange={(e) => setMovementForm((form) => ({ ...form, category: e.target.value }))}><option>General</option><option>Salario</option><option>Ventas</option><option>Hogar</option><option>Mercado</option><option>Transporte</option><option>Servicios</option><option>Salud</option><option>Ocio</option><option>Educación</option><option>Otros</option></select></Field>
-            <Field label="Cuenta"><select value={movementForm.accountId} onChange={(e) => setMovementForm((form) => ({ ...form, accountId: e.target.value }))}><option value="">{accounts.length ? 'Cuenta principal' : 'Sin asignar'}</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field>
+            <Field label="Cuenta"><select value={movementForm.accountId} onChange={(e) => setMovementForm((form) => ({ ...form, accountId: e.target.value }))}><option value="">{modal === 'edit-expense' || !accounts.length ? 'Sin asignar' : 'Cuenta principal'}</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field>
             <Field label="Notas"><input value={movementForm.notes} onChange={(e) => setMovementForm((form) => ({ ...form, notes: e.target.value }))} placeholder="Opcional" /></Field>
           </div>
-          <div className="form-footer"><button className="button secondary" onClick={() => setModal(null)}>Cancelar</button><button className="button primary" disabled={saving} onClick={() => saveMovement(modal)}>{saving ? 'Guardando…' : 'Guardar'}</button></div>
+          <div className="form-footer"><button className="button secondary" disabled={saving} onClick={() => setModal(null)}>Cancelar</button><button className="button primary" disabled={saving} onClick={() => saveMovement(modal === 'income' ? 'income' : 'expense')}>{saving ? 'Guardando…' : modal === 'edit-expense' ? 'Guardar cambios' : 'Guardar'}</button></div>
         </ModalShell>
       ) : null}
 
