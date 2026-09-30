@@ -5,7 +5,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "AppFinanza",
   description: "Administración financiera personal y familiar compartida.",
-  manifest: "./manifest.webmanifest",
+  manifest: `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/manifest.webmanifest`,
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

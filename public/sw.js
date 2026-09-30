@@ -1,6 +1,9 @@
-const CACHE = "appfinanza-static-v1";
+const CACHE = "appfinanza-static-v2";
 self.addEventListener("install", () => self.skipWaiting());
-self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener("activate", (event) => event.waitUntil(Promise.all([
+  caches.keys().then((names) => Promise.all(names.filter((name) => name.startsWith("appfinanza-") && name !== CACHE).map((name) => caches.delete(name)))),
+  self.clients.claim(),
+])));
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);

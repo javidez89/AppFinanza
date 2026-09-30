@@ -12,15 +12,16 @@ export function LoginCard({ error }: { error?: string }) {
   async function signInWithGoogle() {
     setLoading(true)
     setMessage('')
-    const supabase = createClient()
-    const { error: authError } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}${appPath('/auth/callback/')}`,
-      },
-    })
-    if (authError) {
-      setMessage(authError.message)
+    try {
+      const supabase = createClient()
+      const { error: authError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: `${window.location.origin}${appPath('/auth/callback/')}` },
+      })
+      if (authError) setMessage(authError.message)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo iniciar sesión.')
+    } finally {
       setLoading(false)
     }
   }
