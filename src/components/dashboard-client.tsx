@@ -5,11 +5,12 @@ import { createClient } from '@/lib/supabase/client'
 import { buildLoanSchedule, calculateCdtReturn, formatCOP, type InterestRateType, type LoanFrequency } from '@/lib/finance'
 import { ManagementPanel } from '@/components/management-panel'
 import { appPath } from '@/lib/app-path'
+import { cashDirection, externalFlowDirection, transactionLabel } from '@/lib/finance/transaction-flow'
 
-type View = 'dashboard' | 'movements' | 'loans' | 'investments' | 'management'
-type Modal = null | 'income' | 'expense' | 'edit-expense' | 'loan' | 'investment'
+type View = 'dashboard' | 'movements' | 'cash-box' | 'loans' | 'investments' | 'management'
+type Modal = null | 'income' | 'expense' | 'edit-expense' | 'cash-box-entry' | 'loan' | 'investment'
 
-type TransactionKind = 'income' | 'expense' | 'loan_out' | 'loan_payment' | 'investment_out' | 'investment_return' | 'debt_payment'
+type TransactionKind = 'income' | 'expense' | 'transfer' | 'loan_out' | 'loan_payment' | 'investment_out' | 'investment_return' | 'debt_payment'
 
 type Transaction = {
   id: string
@@ -32,6 +33,7 @@ type Account = {
   institution: string | null
   opening_balance: number
   active: boolean
+  notes: string | null
 }
 
 type Loan = {
@@ -95,16 +97,6 @@ const nextMonthISO = () => {
   return date.toISOString().slice(0, 10)
 }
 
-const kindMeta: Record<TransactionKind, { label: string; direction: 'in' | 'out' }> = {
-  income: { label: 'Ingreso', direction: 'in' },
-  expense: { label: 'Gasto', direction: 'out' },
-  loan_out: { label: 'Préstamo entregado', direction: 'out' },
-  loan_payment: { label: 'Cuota cobrada', direction: 'in' },
-  investment_out: { label: 'Inversión', direction: 'out' },
-  investment_return: { label: 'Redención inversión', direction: 'in' },
-  debt_payment: { label: 'Pago de deuda', direction: 'out' },
-}
-
 function monthKey(date: string) {
   return date.slice(0, 7)
 }
@@ -119,14 +111,6 @@ function monthLabel(key: string) {
   return new Intl.DateTimeFormat('es-CO', { month: 'short' })
     .format(new Date(year, month - 1, 1))
     .replace('.', '')
-}
-
-function isCashIn(kind: TransactionKind) {
-  return kind === 'income' || kind === 'loan_payment' || kind === 'investment_return'
-}
-
-function isCashOut(kind: TransactionKind) {
-  return kind === 'expense' || kind === 'loan_out' || kind === 'investment_out' || kind === 'debt_payment'
 }
 
 export function DashboardClient({ email, name }: { email: string; name: string }) {
@@ -148,6 +132,8 @@ export function DashboardClient({ email, name }: { email: string; name: string }
   const [movementForm, setMovementForm] = useState({
     description: '', amount: '', category: 'General', date: todayISO(), notes: '', accountId: '',
   })
+  const [cashBoxAction, setCashBoxAction] = useState<'deposit' | 'withdrawal'>('deposit')
+  const [cashBoxForm, setCashBoxForm] = useState({ amount: '', date: todayISO(), notes: '', sourceAccountId: '' })
   const [loanForm, setLoanForm] = useState({
     borrower: '', contact: '', description: '', principal: '', rate: '', rateType: 'monthly' as InterestRateType,
     frequency: 'monthly' as LoanFrequency, installments: '6', startDate: todayISO(), firstDueDate: nextMonthISO(), accountId: '',
@@ -206,11 +192,20 @@ export function DashboardClient({ email, name }: { email: string; name: string }
   }, [])
 
   const currentMonth = todayISO().slice(0, 7)
+  const cashBox = accounts.find((account) => account.notes === 'appfinanza:cash-box')
+  const cashBoxEntries = transactions.filter((tx) => tx.account_id === cashBox?.id && tx.kind === 'transfer')
+  const accountBalance = (account: Account) => transactions
+    .filter((tx) => tx.account_id === account.id)
+    .reduce((balance, tx) => {
+      const direction = cashDirection(tx)
+      return balance + (direction === 'in' ? Number(tx.amount) : direction === 'out' ? -Number(tx.amount) : 0)
+    }, Number(account.opening_balance))
+  const cashBoxBalance = cashBox ? accountBalance(cashBox) : 0
   const metrics = useMemo(() => {
     const openingBalances = accounts.reduce((sum, account) => sum + Number(account.opening_balance), 0)
     const cash = transactions.reduce((sum, tx) => {
-      if (isCashIn(tx.kind)) return sum + Number(tx.amount)
-      if (isCashOut(tx.kind)) return sum - Number(tx.amount)
+      if (cashDirection(tx) === 'in') return sum + Number(tx.amount)
+      if (cashDirection(tx) === 'out') return sum - Number(tx.amount)
       return sum
     }, openingBalances)
 
@@ -242,8 +237,8 @@ export function DashboardClient({ email, name }: { email: string; name: string }
       return {
         key,
         label: monthLabel(key),
-        inflow: monthTx.filter((tx) => isCashIn(tx.kind)).reduce((sum, tx) => sum + Number(tx.amount), 0),
-        outflow: monthTx.filter((tx) => isCashOut(tx.kind)).reduce((sum, tx) => sum + Number(tx.amount), 0),
+        inflow: monthTx.filter((tx) => externalFlowDirection(tx) === 'in').reduce((sum, tx) => sum + Number(tx.amount), 0),
+        outflow: monthTx.filter((tx) => externalFlowDirection(tx) === 'out').reduce((sum, tx) => sum + Number(tx.amount), 0),
       }
     })
     const max = Math.max(1, ...rows.flatMap((row) => [row.inflow, row.outflow]))
@@ -345,6 +340,67 @@ export function DashboardClient({ email, name }: { email: string; name: string }
       accountId: transaction.account_id || '',
     })
     setModal('edit-expense')
+  }
+
+  async function createCashBox() {
+    if (saving || cashBox) return
+    setSaving(true)
+    const { error } = await supabase.from('accounts').insert({
+      name: 'Dinero en caja', account_type: 'cash', opening_balance: 0, notes: 'appfinanza:cash-box',
+    })
+    setSaving(false)
+    if (error) {
+      notify(error.message)
+      await loadData()
+      return
+    }
+    notify('Caja creada. Ahora puedes ingresar dinero.')
+    await loadData()
+  }
+
+  function openCashBoxEntry(action: 'deposit' | 'withdrawal') {
+    setCashBoxAction(action)
+    setCashBoxForm({ amount: '', date: todayISO(), notes: '', sourceAccountId: '' })
+    setModal('cash-box-entry')
+  }
+
+  async function saveCashBoxEntry() {
+    if (!cashBox || saving) return
+    const amount = Number(cashBoxForm.amount)
+    if (!Number.isFinite(amount) || amount <= 0 || !cashBoxForm.date) {
+      notify('Indica un valor y una fecha válidos.')
+      return
+    }
+    if (cashBoxAction === 'withdrawal' && amount > cashBoxBalance) {
+      notify('El retiro supera el dinero disponible en caja.')
+      return
+    }
+    const source = accounts.find((account) => account.id === cashBoxForm.sourceAccountId && account.id !== cashBox.id)
+    if (cashBoxAction === 'deposit' && cashBoxForm.sourceAccountId && !source) {
+      notify('Selecciona una cuenta de origen válida.')
+      return
+    }
+    if (source && amount > accountBalance(source)) {
+      notify('La cuenta de origen no tiene saldo suficiente.')
+      return
+    }
+    const notes = cashBoxForm.notes.trim() || null
+    const base = { kind: 'transfer', category: 'Caja', amount, transaction_date: cashBoxForm.date, notes }
+    const rows = cashBoxAction === 'withdrawal'
+      ? [{ ...base, description: 'Retiro de mamá', reference_type: 'cash_box_withdrawal', account_id: cashBox.id }]
+      : source
+        ? [
+            { ...base, description: 'Traslado a caja', reference_type: 'cash_box_transfer_out', account_id: source.id },
+            { ...base, description: 'Entrada a caja', reference_type: 'cash_box_transfer_in', account_id: cashBox.id },
+          ]
+        : [{ ...base, description: 'Ingreso a caja', reference_type: 'cash_box_deposit', account_id: cashBox.id }]
+    setSaving(true)
+    const { error } = await supabase.from('transactions').insert(rows)
+    setSaving(false)
+    if (error) return notify(error.message)
+    setModal(null)
+    notify(cashBoxAction === 'withdrawal' ? 'Retiro registrado sin sumarlo a gastos.' : 'Dinero ingresado a caja.')
+    await loadData()
   }
 
   async function saveLoan() {
@@ -539,6 +595,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
     const items: Array<{ key: View; label: string }> = [
       { key: 'dashboard', label: 'Dashboard' },
       { key: 'movements', label: 'Movimientos' },
+      { key: 'cash-box', label: 'Caja' },
       { key: 'loans', label: 'Préstamos' },
       { key: 'investments', label: 'Inversiones' },
       { key: 'management', label: 'Gerencia' },
@@ -566,7 +623,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
       <main className="main">
         <header className="topbar">
           <div>
-            <h1>{view === 'dashboard' ? `Hola, ${name.split(' ')[0]}` : view === 'movements' ? 'Movimientos' : view === 'loans' ? 'Préstamos' : view === 'investments' ? 'Inversiones' : 'Gerencia financiera'}</h1>
+            <h1>{view === 'dashboard' ? `Hola, ${name.split(' ')[0]}` : view === 'movements' ? 'Movimientos' : view === 'cash-box' ? 'Dinero en caja' : view === 'loans' ? 'Préstamos' : view === 'investments' ? 'Inversiones' : 'Gerencia financiera'}</h1>
             <p>{view === 'dashboard' ? 'Una vista clara de tu dinero, cartera e inversiones.' : 'Información compartida entre los dos usuarios autorizados.'}</p>
           </div>
           <div className="top-actions">
@@ -587,7 +644,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
         {!loading && view === 'dashboard' ? (
           <>
             <section className="metrics">
-              <MetricCard label="Saldo de caja" value={formatCOP(metrics.cash)} note="Cuentas + flujo acumulado" highlight />
+              <MetricCard label="Dinero disponible" value={formatCOP(metrics.cash)} note="Cuentas + efectivo" highlight />
               <MetricCard label="Ingresos del mes" value={formatCOP(metrics.income)} note="Ingresos normales" />
               <MetricCard label="Gastos del mes" value={formatCOP(metrics.expense)} note="Gastos registrados" />
               <MetricCard label="Por cobrar" value={formatCOP(metrics.receivable)} note="Cuotas pendientes" />
@@ -657,16 +714,38 @@ export function DashboardClient({ email, name }: { email: string; name: string }
                   {transactions.length === 0 ? <tr><td colSpan={6} className="empty">Aún no hay movimientos.</td></tr> : transactions.map((tx) => (
                     <tr key={tx.id}>
                       <td>{shortDate(tx.transaction_date)}</td>
-                      <td><span className={`badge ${isCashIn(tx.kind) ? 'paid' : 'pending'}`}>{kindMeta[tx.kind].label}</span></td>
+                      <td><span className={`badge ${cashDirection(tx) === 'in' ? 'paid' : 'pending'}`}>{transactionLabel(tx)}</span></td>
                       <td><strong>{tx.description}</strong>{tx.notes ? <div className="sub">{tx.notes}</div> : null}</td>
                       <td>{tx.category}</td>
-                      <td className={isCashIn(tx.kind) ? 'amount-positive' : 'amount-negative'}>{isCashIn(tx.kind) ? '+' : '-'} {formatCOP(tx.amount)}</td>
+                      <td className={cashDirection(tx) === 'in' ? 'amount-positive' : 'amount-negative'}>{cashDirection(tx) === 'in' ? '+' : '-'} {formatCOP(tx.amount)}</td>
                       <td>{tx.kind === 'expense' ? <button className="button secondary small" onClick={() => openEditExpense(tx)} aria-label={`Editar gasto: ${tx.description}`}>Editar</button> : null}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+          </section>
+        ) : null}
+
+        {!loading && view === 'cash-box' ? (
+          <section className="section">
+            <div className="section-title">
+              <div><h2>Caja de mamá</h2><p>Controla el efectivo que ella puede usar. Los retiros reducen el saldo sin sumarse a gastos.</p></div>
+              {cashBox ? <div className="top-actions cash-box-actions"><button className="button secondary" onClick={() => openCashBoxEntry('deposit')}>+ Ingresar dinero</button><button className="button primary" onClick={() => openCashBoxEntry('withdrawal')}>Registrar retiro</button></div> : null}
+            </div>
+            {cashBox ? <>
+              <div className="cash-box-summary"><span>Disponible en caja</span><strong>{formatCOP(cashBoxBalance)}</strong><small>Saldo compartido y actualizado con cada movimiento.</small></div>
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>Fecha</th><th>Movimiento</th><th>Nota</th><th>Valor</th></tr></thead>
+                  <tbody>
+                    {cashBoxEntries.length === 0 ? <tr><td colSpan={4} className="empty">Aún no hay movimientos en caja.</td></tr> : cashBoxEntries.map((tx) => (
+                      <tr key={tx.id}><td>{shortDate(tx.transaction_date)}</td><td>{transactionLabel(tx)}</td><td>{tx.notes || '—'}</td><td className={cashDirection(tx) === 'in' ? 'amount-positive' : 'amount-negative'}>{cashDirection(tx) === 'in' ? '+' : '-'} {formatCOP(tx.amount)}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </> : <div className="panel empty"><p>Crea la caja para registrar el dinero que recibe y retira tu mamá.</p><button className="button primary" disabled={saving} onClick={createCashBox}>{saving ? 'Creando…' : 'Crear caja'}</button></div>}
           </section>
         ) : null}
 
@@ -753,6 +832,19 @@ export function DashboardClient({ email, name }: { email: string; name: string }
         </ModalShell>
       ) : null}
 
+      {modal === 'cash-box-entry' ? (
+        <ModalShell title={cashBoxAction === 'deposit' ? 'Ingresar dinero a caja' : 'Registrar retiro de mamá'} onClose={() => setModal(null)}>
+          <div className="form-grid">
+            <Field label="Valor"><input autoFocus type="number" min="0.01" step="0.01" inputMode="decimal" value={cashBoxForm.amount} onChange={(e) => setCashBoxForm((form) => ({ ...form, amount: e.target.value }))} placeholder="0" /></Field>
+            <Field label="Fecha"><input type="date" value={cashBoxForm.date} onChange={(e) => setCashBoxForm((form) => ({ ...form, date: e.target.value }))} /></Field>
+            {cashBoxAction === 'deposit' ? <Field label="Origen del dinero"><select value={cashBoxForm.sourceAccountId} onChange={(e) => setCashBoxForm((form) => ({ ...form, sourceAccountId: e.target.value }))}><option value="">Dinero recibido fuera de las cuentas</option>{accounts.filter((account) => account.id !== cashBox?.id && account.active).map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field> : null}
+            <Field label="Nota" full><input value={cashBoxForm.notes} onChange={(e) => setCashBoxForm((form) => ({ ...form, notes: e.target.value }))} placeholder={cashBoxAction === 'deposit' ? 'Quién entregó el dinero' : 'Para qué lo tomó'} /></Field>
+          </div>
+          {cashBoxAction === 'deposit' ? <p className="sub" style={{ marginTop: 12 }}>Si este dinero ya está en una cuenta de la app, selecciónala como origen para evitar contarlo dos veces.</p> : null}
+          <div className="form-footer"><button className="button secondary" disabled={saving} onClick={() => setModal(null)}>Cancelar</button><button className="button primary" disabled={saving} onClick={saveCashBoxEntry}>{saving ? 'Guardando…' : 'Guardar'}</button></div>
+        </ModalShell>
+      ) : null}
+
       {modal === 'loan' ? (
         <ModalShell title="Nuevo préstamo" onClose={() => setModal(null)}>
           <div className="form-grid">
@@ -809,9 +901,9 @@ function RecentTransactions({ transactions, onViewAll }: { transactions: Transac
       <div className="quick-list">
         {transactions.length === 0 ? <div className="empty">Registra tu primer ingreso o gasto.</div> : transactions.map((tx) => (
           <div className="quick-item" key={tx.id}>
-            <div className="quick-icon">{kindMeta[tx.kind].label.slice(0, 2).toUpperCase()}</div>
+            <div className="quick-icon">{transactionLabel(tx).slice(0, 2).toUpperCase()}</div>
             <div><strong>{tx.description}</strong><span>{shortDate(tx.transaction_date)} · {tx.category}</span></div>
-            <div className={`quick-amount ${isCashIn(tx.kind) ? 'in' : 'out'}`}>{isCashIn(tx.kind) ? '+' : '-'} {formatCOP(tx.amount)}</div>
+            <div className={`quick-amount ${cashDirection(tx) === 'in' ? 'in' : 'out'}`}>{cashDirection(tx) === 'in' ? '+' : '-'} {formatCOP(tx.amount)}</div>
           </div>
         ))}
       </div>
