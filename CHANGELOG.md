@@ -4,6 +4,24 @@ Las versiones en preparación no se han publicado. El estado del despliegue y la
 
 ## [Sin publicar]
 
+## [0.3.0] - 2026-10-07
+
+### Añadido
+
+- Instalación PWA guiada en Windows y Android, con botón nativo cuando el navegador lo admite e instrucciones alternativas.
+- Identidad estable del manifest, iconos para uso normal y maskable, metadata e icono Apple.
+- Página pública sin conexión y aviso para aceptar una actualización antes de recargar.
+- Validación automática de la exportación PWA y CI para la raíz y `/AppFinanza`.
+
+### Corregido
+
+- Caché del service worker limitada al alcance de la app, renovada por versión del contenido y sin guardar páginas autenticadas ni respuestas financieras.
+
+### Despliegue
+
+- Conserva la modalidad de interés total y el versionamiento de 0.2.0. La migración de préstamos ya aplicada se mantiene sin nuevos cambios de base de datos.
+- Los diálogos de instalación de Windows/Android y el inicio de sesión deben comprobarse en los dispositivos y cuentas correspondientes; la página sin conexión no permite operar las finanzas.
+
 ## [0.2.0] - 2026-10-07
 
 ### Añadido
@@ -22,7 +40,7 @@ Las versiones en preparación no se han publicado. El estado del despliegue y la
 
 - 34 pruebas unitarias; lint, typecheck y build de Pages correctos. Migración comprobada en PostgreSQL aislado. CI incluye una prueba SQL sobre PostgreSQL 17.
 - Aplicar `20261007204216_loan_total_interest.sql` antes de publicar el formulario. No se modifican préstamos ni cronogramas ya registrados.
-- No incluye los cambios PWA del PR #2, que continúan en una rama independiente.
+- Esta versión no incluye los cambios PWA del PR #2; se incorporan en 0.3.0.
 
 ## [0.1.0] - Base del repositorio
 
