@@ -10,6 +10,8 @@ Aplicación web/PWA de administración financiera personal y familiar.
 
 Comandos de calidad: `npm run lint`, `npm run typecheck`, `npm test` y `npm run build`.
 
+Cada ajuste sigue la [política de versionamiento](docs/VERSIONING.md) y se registra en [CHANGELOG.md](CHANGELOG.md). Ejecuta también `npm run version:check` para comprobar que la versión y sus registros coinciden.
+
 ## Despliegue
 
 El frontend se exporta como contenido estático en `out/`. El flujo de `.github/workflows/deploy-pages.yml` valida el código y publica esa carpeta desde `master` en `https://javidez89.github.io/AppFinanza/`.
