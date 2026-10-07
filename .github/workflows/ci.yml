@@ -5,6 +5,11 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        base-path: ["", "/AppFinanza"]
+    env:
+      NEXT_PUBLIC_BASE_PATH: ${{ matrix.base-path }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

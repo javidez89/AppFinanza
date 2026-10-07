@@ -2,6 +2,8 @@
 
 Aplicación web/PWA de administración financiera personal y familiar.
 
+Instalación en Windows y Android, conexión y comprobaciones PWA: [docs/PWA.md](docs/PWA.md).
+
 ## Desarrollo
 
 1. Copia `.env.example` a `.env.local` y completa únicamente la URL pública y publishable key de Supabase.
