@@ -4,6 +4,18 @@ Las versiones en preparación no se han publicado. El estado del despliegue y la
 
 ## [Sin publicar]
 
+## [0.3.1] - En preparación
+
+### Corregido
+
+- Caja de mamá muestra todos los movimientos que participan en su saldo, incluidos gastos, préstamos, inversiones y sus cobros; utiliza la misma selección de movimientos que el cálculo del saldo.
+- La tabla presenta descripción y notas para identificar cada entrada/salida. El resumen indica el saldo inicial y explica los movimientos incluidos.
+
+### Validación y despliegue
+
+- Prueba de regresión del saldo reportado: las siete operaciones visibles explican -$29.750.000; pruebas de aislamiento entre cuentas y movimientos sin efecto en efectivo.
+- Corrección de visualización y selección de filas; no modifica ni reclasifica registros existentes y no requiere migración de base de datos.
+
 ## [0.3.0] - 2026-10-07
 
 ### Añadido

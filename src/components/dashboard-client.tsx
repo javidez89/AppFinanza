@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { buildLoanSchedule, calculateCdtReturn, formatCOP, type InterestRateType, type LoanFrequency } from '@/lib/finance'
 import { ManagementPanel } from '@/components/management-panel'
 import { appPath } from '@/lib/app-path'
-import { cashDirection, externalFlowDirection, transactionLabel } from '@/lib/finance/transaction-flow'
+import { accountCashEntries, cashDirection, externalFlowDirection, transactionLabel } from '@/lib/finance/transaction-flow'
 
 type View = 'dashboard' | 'movements' | 'cash-box' | 'loans' | 'investments' | 'management'
 type Modal = null | 'income' | 'expense' | 'edit-expense' | 'cash-box-entry' | 'loan' | 'investment'
@@ -193,9 +193,8 @@ export function DashboardClient({ email, name }: { email: string; name: string }
 
   const currentMonth = todayISO().slice(0, 7)
   const cashBox = accounts.find((account) => account.notes === 'appfinanza:cash-box')
-  const cashBoxEntries = transactions.filter((tx) => tx.account_id === cashBox?.id && tx.kind === 'transfer')
-  const accountBalance = (account: Account) => transactions
-    .filter((tx) => tx.account_id === account.id)
+  const cashBoxEntries = accountCashEntries(transactions, cashBox?.id)
+  const accountBalance = (account: Account) => accountCashEntries(transactions, account.id)
     .reduce((balance, tx) => {
       const direction = cashDirection(tx)
       return balance + (direction === 'in' ? Number(tx.amount) : direction === 'out' ? -Number(tx.amount) : 0)
@@ -742,13 +741,13 @@ export function DashboardClient({ email, name }: { email: string; name: string }
               {cashBox ? <div className="top-actions cash-box-actions"><button className="button secondary" onClick={() => openCashBoxEntry('deposit')}>+ Ingresar dinero</button><button className="button primary" onClick={() => openCashBoxEntry('withdrawal')}>Registrar retiro</button></div> : null}
             </div>
             {cashBox ? <>
-              <div className="cash-box-summary"><span>Disponible en caja</span><strong>{formatCOP(cashBoxBalance)}</strong><small>Saldo compartido y actualizado con cada movimiento.</small></div>
+              <div className="cash-box-summary"><span>Disponible en caja</span><strong>{formatCOP(cashBoxBalance)}</strong><small>Saldo inicial: {formatCOP(cashBox.opening_balance)}. El saldo incluye todas las entradas y salidas de esta cuenta, también gastos y préstamos.</small></div>
               <div className="table-wrap">
                 <table>
-                  <thead><tr><th>Fecha</th><th>Movimiento</th><th>Nota</th><th>Valor</th></tr></thead>
+                  <thead><tr><th>Fecha</th><th>Movimiento</th><th>Detalle</th><th>Valor</th></tr></thead>
                   <tbody>
                     {cashBoxEntries.length === 0 ? <tr><td colSpan={4} className="empty">Aún no hay movimientos en caja.</td></tr> : cashBoxEntries.map((tx) => (
-                      <tr key={tx.id}><td>{shortDate(tx.transaction_date)}</td><td>{transactionLabel(tx)}</td><td>{tx.notes || '—'}</td><td className={cashDirection(tx) === 'in' ? 'amount-positive' : 'amount-negative'}>{cashDirection(tx) === 'in' ? '+' : '-'} {formatCOP(tx.amount)}</td></tr>
+                      <tr key={tx.id}><td>{shortDate(tx.transaction_date)}</td><td>{transactionLabel(tx)}</td><td><div>{tx.description}</div>{tx.notes ? <div className="sub">{tx.notes}</div> : null}</td><td className={cashDirection(tx) === 'in' ? 'amount-positive' : 'amount-negative'}>{cashDirection(tx) === 'in' ? '+' : '-'} {formatCOP(tx.amount)}</td></tr>
                     ))}
                   </tbody>
                 </table>
