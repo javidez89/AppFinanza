@@ -3,6 +3,30 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  loan-migration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: loan_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate total-interest migration in a disposable database
+        env:
+          PGPASSWORD: postgres
+        run: >-
+          psql -h localhost -U postgres -d loan_test -v ON_ERROR_STOP=1
+          -f tests/db/loan-interest-fixture.sql
+          -f supabase/migrations/20261007204216_loan_total_interest.sql
+          -f tests/db/loan-interest-assertions.sql
   verify:
     runs-on: ubuntu-latest
     steps:
@@ -10,6 +34,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: npm }
       - run: npm ci
+      - run: npm run version:check
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
