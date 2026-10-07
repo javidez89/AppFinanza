@@ -2,6 +2,11 @@ export type CashDirection = 'in' | 'out' | null
 
 type FlowTransaction = { kind: string; reference_type?: string | null }
 
+export function accountCashEntries<T extends FlowTransaction & { account_id?: string | null }>(transactions: readonly T[], accountId?: string) {
+  if (!accountId) return []
+  return transactions.filter((transaction) => transaction.account_id === accountId && cashDirection(transaction) !== null)
+}
+
 export function cashDirection(transaction: FlowTransaction): CashDirection {
   if (transaction.kind === 'income' || transaction.kind === 'loan_payment' || transaction.kind === 'investment_return') return 'in'
   if (transaction.kind === 'expense' || transaction.kind === 'loan_out' || transaction.kind === 'investment_out' || transaction.kind === 'debt_payment') return 'out'
