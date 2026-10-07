@@ -4,7 +4,7 @@ Las versiones en preparación no se han publicado. El estado del despliegue y la
 
 ## [Sin publicar]
 
-## [0.3.1] - En preparación
+## [0.3.1] - 2026-10-07
 
 ### Corregido
 
