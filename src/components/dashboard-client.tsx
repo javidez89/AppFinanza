@@ -135,7 +135,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
   const [cashBoxAction, setCashBoxAction] = useState<'deposit' | 'withdrawal'>('deposit')
   const [cashBoxForm, setCashBoxForm] = useState({ amount: '', date: todayISO(), notes: '', sourceAccountId: '' })
   const [loanForm, setLoanForm] = useState({
-    borrower: '', contact: '', description: '', principal: '', rate: '', rateType: 'monthly' as InterestRateType,
+    borrower: '', contact: '', description: '', principal: '', rate: '', rateType: 'total' as InterestRateType,
     frequency: 'monthly' as LoanFrequency, installments: '6', startDate: todayISO(), firstDueDate: nextMonthISO(), accountId: '',
   })
   const [investmentForm, setInvestmentForm] = useState({
@@ -249,19 +249,27 @@ export function DashboardClient({ email, name }: { email: string; name: string }
     return installments.filter((item) => item.status !== 'paid').slice(0, 5)
   }, [installments])
 
-  const loanPreview = useMemo(() => {
+  const { preview: loanPreview, error: loanValidationError } = useMemo(() => {
     const principal = Number(loanForm.principal)
     const rate = Number(loanForm.rate)
     const count = Number(loanForm.installments)
-    if (!principal || principal <= 0 || Number.isNaN(rate) || !count || count <= 0 || !loanForm.firstDueDate) return null
-    return buildLoanSchedule({
-      principal,
-      interestRate: rate,
-      interestRateType: loanForm.rateType,
-      installments: count,
-      frequency: loanForm.frequency,
-      firstDueDate: loanForm.firstDueDate,
-    })
+    if (!loanForm.principal || !loanForm.installments || !loanForm.firstDueDate || !loanForm.startDate) return { preview: null, error: '' }
+    try {
+      return {
+        error: '',
+        preview: buildLoanSchedule({
+          principal,
+          interestRate: rate,
+          interestRateType: loanForm.rateType,
+          installments: count,
+          frequency: loanForm.frequency,
+          firstDueDate: loanForm.firstDueDate,
+          startDate: loanForm.startDate,
+        }),
+      }
+    } catch (error) {
+      return { preview: null, error: error instanceof Error ? error.message : 'Revisa los datos del préstamo.' }
+    }
   }, [loanForm])
 
   const investmentPreview = useMemo(() => {
@@ -405,7 +413,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
 
   async function saveLoan() {
     if (!loanPreview || !loanForm.borrower.trim()) {
-      notify('Completa el nombre, capital, interés y número de cuotas.')
+      notify(loanValidationError || 'Completa el nombre, capital, interés y número de cuotas.')
       return
     }
     const principal = Number(loanForm.principal)
@@ -463,7 +471,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
     }
 
     setSaving(false)
-    setLoanForm({ borrower: '', contact: '', description: '', principal: '', rate: '', rateType: 'monthly', frequency: 'monthly', installments: '6', startDate: todayISO(), firstDueDate: nextMonthISO(), accountId: '' })
+    setLoanForm({ borrower: '', contact: '', description: '', principal: '', rate: '', rateType: 'total', frequency: 'monthly', installments: '6', startDate: todayISO(), firstDueDate: nextMonthISO(), accountId: '' })
     setModal(null)
     notify('Préstamo creado con su plan de cuotas.')
     await loadData()
@@ -762,6 +770,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
                 return (
                   <article className="entity-card" key={loan.id}>
                     <div className="entity-top"><div><h3>{loan.borrower_name}</h3><div className="sub">{loan.description || 'Préstamo personal'} · {loan.installments_count} cuotas</div></div><span className={`badge ${loan.status === 'active' ? 'active' : 'paid'}`}>{loan.status === 'active' ? 'Activo' : 'Pagado'}</span></div>
+                    <p className="sub">Interés: {Number(loan.interest_rate)} % · {loan.interest_rate_type === 'total' ? 'sobre el capital, una sola vez' : loan.interest_rate_type === 'monthly' ? 'mensual sobre saldo' : 'efectivo anual sobre saldo'}</p>
                     <div className="entity-number">{formatCOP(pending)}</div><div className="sub">Pendiente por cobrar</div>
                     <div className="progress"><div style={{ width: `${progress}%` }} /></div>
                     <div className="entity-stats">
@@ -852,13 +861,15 @@ export function DashboardClient({ email, name }: { email: string; name: string }
             <Field label="Contacto"><input value={loanForm.contact} onChange={(e) => setLoanForm((form) => ({ ...form, contact: e.target.value }))} placeholder="Teléfono o referencia" /></Field>
             <Field label="Capital prestado"><input type="number" min="0" inputMode="decimal" value={loanForm.principal} onChange={(e) => setLoanForm((form) => ({ ...form, principal: e.target.value }))} placeholder="0" /></Field>
             <Field label="Tasa de interés %"><input type="number" min="0" step="0.01" inputMode="decimal" value={loanForm.rate} onChange={(e) => setLoanForm((form) => ({ ...form, rate: e.target.value }))} placeholder="Ej. 2" /></Field>
-            <Field label="Cómo expresas la tasa"><select value={loanForm.rateType} onChange={(e) => setLoanForm((form) => ({ ...form, rateType: e.target.value as InterestRateType }))}><option value="monthly">Mensual</option><option value="annual_effective">Efectiva anual (E.A.)</option></select></Field>
-            <Field label="Periodicidad"><select value={loanForm.frequency} onChange={(e) => setLoanForm((form) => ({ ...form, frequency: e.target.value as LoanFrequency }))}><option value="monthly">Mensual</option><option value="biweekly">Quincenal</option><option value="weekly">Semanal</option></select></Field>
+            <Field label="Cómo se aplica el interés"><select value={loanForm.rateType} onChange={(e) => setLoanForm((form) => ({ ...form, rateType: e.target.value as InterestRateType }))}><option value="total">Sobre el capital, una sola vez</option><option value="monthly">Mensual sobre saldo</option><option value="annual_effective">Efectiva anual (E.A.) sobre saldo</option></select></Field>
+            <Field label="Periodicidad"><select value={loanForm.frequency} onChange={(e) => setLoanForm((form) => ({ ...form, frequency: e.target.value as LoanFrequency }))}><option value="monthly">Mensual</option><option value="biweekly">Cada 14 días</option><option value="weekly">Semanal</option></select></Field>
             <Field label="Número de cuotas"><input type="number" min="1" max="240" value={loanForm.installments} onChange={(e) => setLoanForm((form) => ({ ...form, installments: e.target.value }))} /></Field>
             <Field label="Fecha de entrega"><input type="date" value={loanForm.startDate} onChange={(e) => setLoanForm((form) => ({ ...form, startDate: e.target.value }))} /></Field>
             <Field label="Cuenta de origen"><select value={loanForm.accountId} onChange={(e) => setLoanForm((form) => ({ ...form, accountId: e.target.value }))}><option value="">{accounts.length ? 'Cuenta principal' : 'Sin asignar'}</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field>
             <Field label="Primera cuota"><input type="date" value={loanForm.firstDueDate} onChange={(e) => setLoanForm((form) => ({ ...form, firstDueDate: e.target.value }))} /></Field>
             <Field label="Descripción" full><input value={loanForm.description} onChange={(e) => setLoanForm((form) => ({ ...form, description: e.target.value }))} placeholder="Opcional" /></Field>
+            <p className="loan-interest-help">{loanForm.rateType === 'total' ? 'El porcentaje se aplica una sola vez al capital prestado y se reparte entre todas las cuotas. Las fechas y la periodicidad no aumentan el interés. Puede haber ajustes de centavos entre cuotas.' : 'El interés se calcula sobre el saldo pendiente en cada período. Este plan no incluye interés adicional por aplazar la primera cuota.'}</p>
+            {loanValidationError ? <p className="notice error loan-interest-help" role="alert">{loanValidationError}</p> : null}
             {loanPreview ? <div className="preview-box"><div><span>Cuota aproximada</span><strong>{formatCOP(loanPreview.fixedPayment)}</strong></div><div><span>Interés total</span><strong>{formatCOP(loanPreview.totalInterest)}</strong></div><div><span>Total a cobrar</span><strong>{formatCOP(loanPreview.totalToCollect)}</strong></div></div> : null}
           </div>
           <div className="form-footer"><button className="button secondary" onClick={() => setModal(null)}>Cancelar</button><button className="button primary" disabled={saving} onClick={saveLoan}>{saving ? 'Creando…' : 'Crear préstamo'}</button></div>

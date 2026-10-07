@@ -288,3 +288,4 @@ tr:last-child td { border-bottom:0; }
 .pwa-panel p { max-width: 70ch; line-height: 1.5; }
 .pwa-panel button { min-height: 44px; padding: 10px 18px; border: 0; border-radius: 12px; background: var(--navy); color: white; margin-top: 8px; }
 .pwa-panel :focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
+.loan-interest-help { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
