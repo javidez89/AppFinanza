@@ -1,10 +1,11 @@
 {
   "name": "appfinanza",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "postbuild": "node scripts/validate-pwa.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "version:check": "node scripts/check-version.mjs",

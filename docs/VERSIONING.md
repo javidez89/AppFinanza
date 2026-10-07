@@ -31,4 +31,4 @@ Las correcciones posteriores se publican con una nueva versión. No mover ni sob
 
 ## Estado inicial
 
-La versión encontrada al adoptar esta política fue `0.1.0`; no se ha reconstruido un historial de releases anteriores. El PR de interés total propone `0.2.0` porque incorpora una modalidad nueva. La mejora PWA del PR #2 sigue en otra rama: al integrar cualquiera de los PR primero, ajustar la versión y el changelog del siguiente contra el nuevo `master`.
+La versión encontrada al adoptar esta política fue `0.1.0`; no se ha reconstruido un historial de releases anteriores. El interés total corresponde a `0.2.0` y la mejora PWA a `0.3.0`. El estado efectivo de publicación se verifica en los despliegues y releases de GitHub, no únicamente en estas notas.

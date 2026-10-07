@@ -9,16 +9,18 @@ export default function manifest(): MetadataRoute.Manifest {
     short_name: "AppFinanza",
     description: "Administración financiera personal y familiar compartida.",
     start_url: `${base}/`,
+    id: `${base}/`,
     scope: `${base}/`,
     display: "standalone",
     background_color: "#f5f7fb",
     theme_color: "#12324a",
     lang: "es-CO",
-    icons: [192, 512].map((size) => ({
+    prefer_related_applications: false,
+    icons: [192, 512].flatMap((size) => (["any", "maskable"] as const).map((purpose) => ({
       src: `${base}/icon-${size}.png`,
       sizes: `${size}x${size}`,
       type: "image/png",
-      purpose: "maskable" as const,
-    })),
+      purpose,
+    }))),
   };
 }
