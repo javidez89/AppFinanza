@@ -16,4 +16,4 @@
 - En la modalidad total, cambiar fechas, periodicidad o número de cuotas no aumenta el interés acordado. No se generan cargos adicionales por aplazar la primera cuota. Las modalidades sobre saldo tampoco calculan automáticamente interés por períodos de gracia; ese acuerdo requiere soporte específico.
 - No se recalculan ni convierten préstamos existentes. Si un préstamo se registró con la modalidad incorrecta, revisar su acuerdo y los pagos antes de corregirlo.
 
-Antes de desplegar el frontend con esta modalidad, aplicar la migración `20261007201853_loan_total_interest.sql` en Supabase. Amplía únicamente el CHECK de `interest_rate_type`; conserva los registros, permisos y políticas existentes. Las pruebas SQL de `tests/db/` se ejecutan exclusivamente en una base desechable, nunca en producción.
+Antes de desplegar el frontend con esta modalidad, aplicar la migración `20261007204216_loan_total_interest.sql` en Supabase. Amplía únicamente el CHECK de `interest_rate_type`; conserva los registros, permisos y políticas existentes. Las pruebas SQL de `tests/db/` se ejecutan exclusivamente en una base desechable, nunca en producción.

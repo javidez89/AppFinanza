@@ -25,7 +25,7 @@ jobs:
         run: >-
           psql -h localhost -U postgres -d loan_test -v ON_ERROR_STOP=1
           -f tests/db/loan-interest-fixture.sql
-          -f supabase/migrations/20261007201853_loan_total_interest.sql
+          -f supabase/migrations/20261007204216_loan_total_interest.sql
           -f tests/db/loan-interest-assertions.sql
   verify:
     runs-on: ubuntu-latest

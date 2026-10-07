@@ -4,7 +4,7 @@ Las versiones en preparación no se han publicado. El estado del despliegue y la
 
 ## [Sin publicar]
 
-## [0.2.0] - En preparación
+## [0.2.0] - 2026-10-07
 
 ### Añadido
 
@@ -21,7 +21,7 @@ Las versiones en preparación no se han publicado. El estado del despliegue y la
 ### Validación y despliegue
 
 - 34 pruebas unitarias; lint, typecheck y build de Pages correctos. Migración comprobada en PostgreSQL aislado. CI incluye una prueba SQL sobre PostgreSQL 17.
-- Aplicar `20261007201853_loan_total_interest.sql` antes de publicar el formulario. No se modifican préstamos ni cronogramas ya registrados.
+- Aplicar `20261007204216_loan_total_interest.sql` antes de publicar el formulario. No se modifican préstamos ni cronogramas ya registrados.
 - No incluye los cambios PWA del PR #2, que continúan en una rama independiente.
 
 ## [0.1.0] - Base del repositorio
