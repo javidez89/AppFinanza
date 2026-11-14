@@ -16,9 +16,15 @@ export function PwaRegister() {
 
   useEffect(() => {
     const standalone = window.matchMedia("(display-mode: standalone)");
+    const legacyStandalone = standalone as unknown as {
+      addListener(listener: () => void): void;
+      removeListener(listener: () => void): void;
+    };
     const syncDisplay = () => setInstalled(standalone.matches);
     syncDisplay();
-    standalone.addEventListener("change", syncDisplay);
+    // Safari versions that still support PWAs may expose the legacy MediaQueryList API only.
+    if ("addEventListener" in standalone) standalone.addEventListener("change", syncDisplay);
+    else legacyStandalone.addListener(syncDisplay);
     const beforeInstall = (event: Event) => {
       event.preventDefault();
       setPrompt(event as InstallPrompt);
@@ -59,7 +65,8 @@ export function PwaRegister() {
     }
     return () => {
       disposed = true;
-      standalone.removeEventListener("change", syncDisplay);
+      if ("removeEventListener" in standalone) standalone.removeEventListener("change", syncDisplay);
+      else legacyStandalone.removeListener(syncDisplay);
       window.removeEventListener("beforeinstallprompt", beforeInstall);
       window.removeEventListener("appinstalled", onInstalled);
       navigator.serviceWorker?.removeEventListener("controllerchange", onController);
