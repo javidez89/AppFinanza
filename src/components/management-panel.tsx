@@ -14,6 +14,7 @@ type Account = {
   institution: string | null
   opening_balance: number
   active: boolean
+  notes: string | null
 }
 
 type Transaction = {
@@ -169,6 +170,7 @@ export function ManagementPanel({
   }, 0), [transactions])
 
   const cashTotal = accountBalances.reduce((sum, account) => sum + account.balance, 0) + unassignedCash
+  const cashBoxBalance = accountBalances.find((account) => account.notes === 'appfinanza:cash-box')?.balance ?? 0
   const investmentAssets = investments.filter((item) => item.status === 'active' || item.status === 'matured').reduce((sum, item) => sum + Number(item.principal), 0)
   const fixedAssetValue = fixedAssets.reduce((sum, item) => sum + Number(item.current_value), 0)
   const receivableAssets = installments.filter((item) => item.status !== 'paid').reduce((sum, item) => sum + Number(item.principal_amount), 0)
@@ -222,6 +224,14 @@ export function ManagementPanel({
     const categories = Array.from(categoryMap.entries()).sort((a, b) => b[1] - a[1])
     return { tx, inflow, outflow, income, expense, net: inflow - outflow, categories }
   }, [transactions, reportMonth])
+
+  const currentMonthFlow = useMemo(() => {
+    const monthTransactions = transactions.filter((item) => monthKey(item.transaction_date) === currentMonthKey())
+    return {
+      income: monthTransactions.filter((item) => item.kind === 'income').reduce((sum, item) => sum + Number(item.amount), 0),
+      expense: monthTransactions.filter((item) => item.kind === 'expense').reduce((sum, item) => sum + Number(item.amount), 0),
+    }
+  }, [transactions])
 
   async function saveAccount() {
     const opening = Number(accountForm.openingBalance || 0)
@@ -531,7 +541,7 @@ export function ManagementPanel({
             <MetricCard label="Patrimonio neto" value={formatCOP(netWorth)} note="Activos menos obligaciones" highlight />
             <MetricCard label="Activos" value={formatCOP(totalAssets)} note="Dinero + bienes + inversiones + cartera" />
             <MetricCard label="Pasivos" value={formatCOP(totalLiabilities)} note="Tarjetas + deudas propias" />
-            <MetricCard label="Caja disponible" value={formatCOP(cashTotal)} note={unassignedCash !== 0 ? `Incluye ${formatCOP(unassignedCash)} sin asignar` : 'Saldos por cuenta'} />
+            <MetricCard label="Dinero disponible" value={formatCOP(cashTotal)} note={unassignedCash !== 0 ? `Incluye ${formatCOP(unassignedCash)} sin asignar` : 'Cuentas y efectivo'} />
           </section>
           <section className="dashboard-grid">
             <div className="panel">
@@ -541,12 +551,14 @@ export function ManagementPanel({
               </div>
             </div>
             <div className="panel">
-              <div className="panel-header"><div><h2>Distribución</h2><span>Foto financiera actual</span></div></div>
+              <div className="panel-header"><div><h2>Distribución</h2><span>Foto financiera actual y gasto del mes</span></div></div>
               <div className="stack-list">
                 <StackRow label="Cuentas y efectivo" value={cashTotal} total={Math.max(totalAssets, 1)} />
+                <StackRow label="Dinero en caja" value={cashBoxBalance} total={Math.max(cashTotal, 1)} note="Ya está incluido en cuentas y efectivo" />
                 <StackRow label="Bienes" value={fixedAssetValue} total={Math.max(totalAssets, 1)} />
                 <StackRow label="Inversiones" value={investmentAssets} total={Math.max(totalAssets, 1)} />
                 <StackRow label="Capital por cobrar" value={receivableAssets} total={Math.max(totalAssets, 1)} />
+                <StackRow label="Gastos del mes" value={currentMonthFlow.expense} total={Math.max(currentMonthFlow.income, currentMonthFlow.expense, 1)} danger note="Salida mensual; no se descuenta dos veces del patrimonio" />
                 <StackRow label="Tarjetas" value={cardLiabilities} total={Math.max(totalLiabilities, 1)} danger />
                 <StackRow label="Otras deudas" value={debtLiabilities} total={Math.max(totalLiabilities, 1)} danger />
               </div>
@@ -665,9 +677,9 @@ function MetricCard({ label, value, note, highlight = false }: { label: string; 
   return <article className={`metric-card ${highlight ? 'highlight' : ''}`}><div className="metric-label">{label}</div><div className="metric-value">{value}</div><div className="metric-note">{note}</div></article>
 }
 
-function StackRow({ label, value, total, danger = false }: { label: string; value: number; total: number; danger?: boolean }) {
+function StackRow({ label, value, total, danger = false, note }: { label: string; value: number; total: number; danger?: boolean; note?: string }) {
   const pct = Math.min(100, Math.max(0, value / Math.max(total, 1) * 100))
-  return <div className="stack-row"><div className="stack-head"><strong>{label}</strong><span>{formatCOP(value)}</span></div><div className={`progress ${danger ? 'danger-progress' : ''}`}><div style={{ width: `${pct}%` }} /></div></div>
+  return <div className="stack-row"><div className="stack-head"><strong>{label}</strong><span>{formatCOP(value)}</span></div>{note ? <div className="stack-note">{note}</div> : null}<div className={`progress ${danger ? 'danger-progress' : ''}`}><div style={{ width: `${pct}%` }} /></div></div>
 }
 
 function SimpleValue({ label, value, strong = false }: { label: string; value: number; strong?: boolean }) {

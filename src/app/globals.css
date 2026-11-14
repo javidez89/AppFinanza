@@ -251,6 +251,7 @@ tr:last-child td { border-bottom:0; }
 .stack-row { padding:8px 0; }
 .stack-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .stack-head strong,.stack-head span { font-size:11px; }
+.stack-note { margin-top:2px; color:var(--muted); font-size:10px; }
 .danger-progress > div { background:#c86b74; }
 .simple-value { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:11px 0; border-bottom:1px solid #edf1f3; }
 .simple-value:last-child { border-bottom:0; }
