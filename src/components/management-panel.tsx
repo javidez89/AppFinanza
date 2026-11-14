@@ -225,11 +225,10 @@ export function ManagementPanel({
     return { tx, inflow, outflow, income, expense, net: inflow - outflow, categories }
   }, [transactions, reportMonth])
 
-  const currentMonthFlow = useMemo(() => {
-    const monthTransactions = transactions.filter((item) => monthKey(item.transaction_date) === currentMonthKey())
+  const accumulatedCashflow = useMemo(() => {
     return {
-      income: monthTransactions.filter((item) => item.kind === 'income').reduce((sum, item) => sum + Number(item.amount), 0),
-      expense: monthTransactions.filter((item) => item.kind === 'expense').reduce((sum, item) => sum + Number(item.amount), 0),
+      income: transactions.filter((item) => item.kind === 'income').reduce((sum, item) => sum + Number(item.amount), 0),
+      expense: transactions.filter((item) => item.kind === 'expense').reduce((sum, item) => sum + Number(item.amount), 0),
     }
   }, [transactions])
 
@@ -551,14 +550,14 @@ export function ManagementPanel({
               </div>
             </div>
             <div className="panel">
-              <div className="panel-header"><div><h2>Distribución</h2><span>Foto financiera actual y gasto del mes</span></div></div>
+              <div className="panel-header"><div><h2>Distribución</h2><span>Foto financiera actual y gastos acumulados</span></div></div>
               <div className="stack-list">
                 <StackRow label="Cuentas y efectivo" value={cashTotal} total={Math.max(totalAssets, 1)} />
                 <StackRow label="Dinero en caja" value={cashBoxBalance} total={Math.max(cashTotal, 1)} note="Ya está incluido en cuentas y efectivo" />
                 <StackRow label="Bienes" value={fixedAssetValue} total={Math.max(totalAssets, 1)} />
                 <StackRow label="Inversiones" value={investmentAssets} total={Math.max(totalAssets, 1)} />
                 <StackRow label="Capital por cobrar" value={receivableAssets} total={Math.max(totalAssets, 1)} />
-                <StackRow label="Gastos del mes" value={currentMonthFlow.expense} total={Math.max(currentMonthFlow.income, currentMonthFlow.expense, 1)} danger note="Salida mensual; no se descuenta dos veces del patrimonio" />
+                <StackRow label="Gastos acumulados" value={accumulatedCashflow.expense} total={Math.max(accumulatedCashflow.income, accumulatedCashflow.expense, 1)} danger note="Todos los gastos registrados; no se descuenta dos veces del patrimonio" />
                 <StackRow label="Tarjetas" value={cardLiabilities} total={Math.max(totalLiabilities, 1)} danger />
                 <StackRow label="Otras deudas" value={debtLiabilities} total={Math.max(totalLiabilities, 1)} danger />
               </div>
