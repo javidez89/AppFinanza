@@ -6,6 +6,7 @@ import { buildLoanSchedule, calculateCdtReturn, formatCOP, type InterestRateType
 import { ManagementPanel } from '@/components/management-panel'
 import { appPath } from '@/lib/app-path'
 import { accountCashEntries, cashDirection, externalFlowDirection, transactionLabel } from '@/lib/finance/transaction-flow'
+import { buildGlobalCashflow } from '@/lib/finance/global-cashflow'
 
 type View = 'dashboard' | 'movements' | 'cash-box' | 'loans' | 'investments' | 'management'
 type Modal = null | 'income' | 'expense' | 'cash-box-entry' | 'loan' | 'investment'
@@ -201,6 +202,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
       return balance + (direction === 'in' ? Number(tx.amount) : direction === 'out' ? -Number(tx.amount) : 0)
     }, Number(account.opening_balance))
   const cashBoxBalance = cashBox ? accountBalance(cashBox) : 0
+  const globalCashflow = useMemo(() => buildGlobalCashflow(transactions, currentMonth), [transactions, currentMonth])
   const metrics = useMemo(() => {
     const openingBalances = accounts.reduce((sum, account) => sum + Number(account.opening_balance), 0)
     const cash = transactions.reduce((sum, tx) => {
@@ -209,12 +211,6 @@ export function DashboardClient({ email, name }: { email: string; name: string }
       return sum
     }, openingBalances)
 
-    const income = transactions
-      .filter((tx) => tx.kind === 'income' && monthKey(tx.transaction_date) === currentMonth)
-      .reduce((sum, tx) => sum + Number(tx.amount), 0)
-    const expense = transactions
-      .filter((tx) => tx.kind === 'expense' && monthKey(tx.transaction_date) === currentMonth)
-      .reduce((sum, tx) => sum + Number(tx.amount), 0)
     const receivable = installments
       .filter((item) => item.status !== 'paid')
       .reduce((sum, item) => sum + Number(item.total_amount), 0)
@@ -222,8 +218,8 @@ export function DashboardClient({ email, name }: { email: string; name: string }
       .filter((investment) => investment.status === 'active' || investment.status === 'matured')
       .reduce((sum, investment) => sum + Number(investment.principal), 0)
 
-    return { cash, income, expense, receivable, invested }
-  }, [transactions, installments, investments, accounts, currentMonth])
+    return { cash, receivable, invested, ...globalCashflow }
+  }, [transactions, installments, investments, accounts, globalCashflow])
 
   const monthlyChart = useMemo(() => {
     const keys: string[] = []
@@ -674,10 +670,11 @@ export function DashboardClient({ email, name }: { email: string; name: string }
 
         {!loading && view === 'dashboard' ? (
           <>
-            <section className="metrics">
-              <MetricCard label="Dinero disponible" value={formatCOP(metrics.cash)} note="Cuentas + efectivo" highlight />
-              <MetricCard label="Ingresos del mes" value={formatCOP(metrics.income)} note="Ingresos normales" />
-              <MetricCard label="Gastos del mes" value={formatCOP(metrics.expense)} note="Gastos registrados" />
+            <section className="metrics dashboard-metrics">
+              <MetricCard label="Dinero disponible" value={formatCOP(metrics.cash)} note="Cuentas, efectivo y caja" highlight />
+              <MetricCard label="Ingresos acumulados" value={formatCOP(metrics.incomeTotal)} note="Incluye el ingreso inicial y posteriores" />
+              <MetricCard label="Gastos del mes" value={formatCOP(metrics.expenseMonth)} note="Gastos registrados este mes" />
+              <MetricCard label="Gastos acumulados" value={formatCOP(metrics.expenseTotal)} note="Todos los gastos registrados" />
               <MetricCard label="Por cobrar" value={formatCOP(metrics.receivable)} note="Cuotas pendientes" />
               <MetricCard label="Capital invertido" value={formatCOP(metrics.invested)} note="CDT activos" />
             </section>

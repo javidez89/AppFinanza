@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatCOP } from '@/lib/finance'
 import { cashDirection, externalFlowDirection } from '@/lib/finance/transaction-flow'
+import { buildGlobalCashflow } from '@/lib/finance/global-cashflow'
 
 type TransactionKind = 'income' | 'expense' | 'transfer' | 'loan_out' | 'loan_payment' | 'investment_out' | 'investment_return' | 'debt_payment'
 
@@ -225,12 +226,7 @@ export function ManagementPanel({
     return { tx, inflow, outflow, income, expense, net: inflow - outflow, categories }
   }, [transactions, reportMonth])
 
-  const accumulatedCashflow = useMemo(() => {
-    return {
-      income: transactions.filter((item) => item.kind === 'income').reduce((sum, item) => sum + Number(item.amount), 0),
-      expense: transactions.filter((item) => item.kind === 'expense').reduce((sum, item) => sum + Number(item.amount), 0),
-    }
-  }, [transactions])
+  const globalCashflow = useMemo(() => buildGlobalCashflow(transactions, currentMonthKey()), [transactions])
 
   async function saveAccount() {
     const opening = Number(accountForm.openingBalance || 0)
@@ -541,12 +537,21 @@ export function ManagementPanel({
             <MetricCard label="Activos" value={formatCOP(totalAssets)} note="Dinero + bienes + inversiones + cartera" />
             <MetricCard label="Pasivos" value={formatCOP(totalLiabilities)} note="Tarjetas + deudas propias" />
             <MetricCard label="Dinero disponible" value={formatCOP(cashTotal)} note={unassignedCash !== 0 ? `Incluye ${formatCOP(unassignedCash)} sin asignar` : 'Cuentas y efectivo'} />
+            <MetricCard label="Gastos acumulados" value={formatCOP(globalCashflow.expenseTotal)} note="Todos los gastos registrados" />
+            <MetricCard label="Gastos del mes" value={formatCOP(globalCashflow.expenseMonth)} note="Control mensual de salidas" />
           </section>
           <section className="dashboard-grid">
             <div className="panel">
-              <div className="panel-header"><div><h2>Alertas financieras</h2><span>Vencimientos y controles que necesitan atención</span></div></div>
-              <div className="alert-list">
-                {alerts.length === 0 ? <div className="empty">No hay alertas relevantes por ahora.</div> : alerts.map((alert, index) => <div className={`alert-row ${alert.level}`} key={`${alert.title}-${index}`}><div><strong>{alert.title}</strong><span>{alert.text}</span></div></div>)}
+              <div className="panel-header"><div><h2>Control global</h2><span>Entradas, gastos y dinero destinado</span></div></div>
+              <div className="stack-list">
+                <StackRow label="Ingresos registrados" value={globalCashflow.incomeTotal} total={Math.max(globalCashflow.cashIn, 1)} />
+                <StackRow label="Entradas directas a caja" value={globalCashflow.cashBoxDirectIn} total={Math.max(globalCashflow.cashIn, 1)} note="Dinero recibido fuera de las cuentas; se muestra separado del ingreso inicial" />
+                <StackRow label="Gastos acumulados" value={globalCashflow.expenseTotal} total={Math.max(globalCashflow.cashOut, 1)} danger />
+                <StackRow label="Compras convertidas en bienes" value={globalCashflow.assetPurchases} total={Math.max(globalCashflow.cashOut, 1)} note="No son gasto: hoy forman parte del patrimonio" />
+                <StackRow label="Préstamos otorgados" value={globalCashflow.loansGranted} total={Math.max(globalCashflow.cashOut, 1)} note="No son gasto: se reflejan en capital por cobrar" />
+                <StackRow label="Inversiones realizadas" value={globalCashflow.investmentsMade} total={Math.max(globalCashflow.cashOut, 1)} note="No son gasto: se reflejan como inversión activa" />
+                <StackRow label="Retiros de caja" value={globalCashflow.cashBoxWithdrawals} total={Math.max(globalCashflow.cashOut, 1)} danger note="Salida registrada desde la caja de mamá" />
+                <StackRow label="Salidas acumuladas" value={globalCashflow.cashOut} total={Math.max(globalCashflow.cashIn, globalCashflow.cashOut, 1)} danger />
               </div>
             </div>
             <div className="panel">
@@ -557,10 +562,16 @@ export function ManagementPanel({
                 <StackRow label="Bienes" value={fixedAssetValue} total={Math.max(totalAssets, 1)} />
                 <StackRow label="Inversiones" value={investmentAssets} total={Math.max(totalAssets, 1)} />
                 <StackRow label="Capital por cobrar" value={receivableAssets} total={Math.max(totalAssets, 1)} />
-                <StackRow label="Gastos acumulados" value={accumulatedCashflow.expense} total={Math.max(accumulatedCashflow.income, accumulatedCashflow.expense, 1)} danger note="Todos los gastos registrados; no se descuenta dos veces del patrimonio" />
+                <StackRow label="Gastos acumulados" value={globalCashflow.expenseTotal} total={Math.max(globalCashflow.incomeTotal, globalCashflow.expenseTotal, 1)} danger note="Todos los gastos registrados; no se descuenta dos veces del patrimonio" />
                 <StackRow label="Tarjetas" value={cardLiabilities} total={Math.max(totalLiabilities, 1)} danger />
                 <StackRow label="Otras deudas" value={debtLiabilities} total={Math.max(totalLiabilities, 1)} danger />
               </div>
+            </div>
+          </section>
+          <section className="panel management-alerts">
+            <div className="panel-header"><div><h2>Alertas financieras</h2><span>Vencimientos y controles que necesitan atención</span></div></div>
+            <div className="alert-list">
+              {alerts.length === 0 ? <div className="empty">No hay alertas relevantes por ahora.</div> : alerts.map((alert, index) => <div className={`alert-row ${alert.level}`} key={`${alert.title}-${index}`}><div><strong>{alert.title}</strong><span>{alert.text}</span></div></div>)}
             </div>
           </section>
         </>
