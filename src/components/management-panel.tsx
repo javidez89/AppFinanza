@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatCOP } from '@/lib/finance'
+import { cashDirection, externalFlowDirection } from '@/lib/finance/transaction-flow'
 
-type TransactionKind = 'income' | 'expense' | 'loan_out' | 'loan_payment' | 'investment_out' | 'investment_return' | 'debt_payment'
+type TransactionKind = 'income' | 'expense' | 'transfer' | 'loan_out' | 'loan_payment' | 'investment_out' | 'investment_return' | 'debt_payment'
 
 type Account = {
   id: string
@@ -23,11 +24,13 @@ type Transaction = {
   amount: number
   transaction_date: string
   account_id?: string | null
+  reference_type?: string | null
 }
 
 type Loan = { id: string; borrower_name: string; status: string }
 type Installment = { id: string; loan_id: string; due_date: string; principal_amount: number; total_amount: number; status: string }
 type Investment = { id: string; institution: string; principal: number; projected_maturity_value: number; maturity_date: string; status: string }
+type FixedAsset = { id: string; name: string; asset_type: 'vehicle' | 'property' | 'equipment' | 'other'; acquisition_date: string; acquisition_cost: number; current_value: number; notes: string | null }
 
 type CreditCard = {
   id: string
@@ -54,17 +57,14 @@ type PersonalDebt = {
   status: 'active' | 'paid' | 'cancelled'
 }
 
-type Section = 'overview' | 'accounts' | 'cards' | 'budgets' | 'goals' | 'debts' | 'reports'
-type FormKind = null | 'account' | 'card' | 'budget' | 'goal' | 'debt'
+type Section = 'overview' | 'accounts' | 'assets' | 'cards' | 'budgets' | 'goals' | 'debts' | 'reports'
+type FormKind = null | 'account' | 'asset' | 'card' | 'budget' | 'goal' | 'debt'
 type ActionTarget = null | { kind: 'goal' | 'card' | 'debt'; id: string; title: string }
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
 const currentMonthKey = () => todayISO().slice(0, 7)
 const monthDate = (key: string) => `${key}-01`
 const monthKey = (date: string) => date.slice(0, 7)
-
-const isCashIn = (kind: TransactionKind) => kind === 'income' || kind === 'loan_payment' || kind === 'investment_return'
-const isCashOut = (kind: TransactionKind) => kind === 'expense' || kind === 'loan_out' || kind === 'investment_out' || kind === 'debt_payment'
 
 function daysUntil(date: string) {
   const start = new Date(`${todayISO()}T12:00:00`).getTime()
@@ -112,6 +112,7 @@ export function ManagementPanel({
   const [form, setForm] = useState<FormKind>(null)
   const [saving, setSaving] = useState(false)
   const [creditCards, setCreditCards] = useState<CreditCard[]>([])
+  const [fixedAssets, setFixedAssets] = useState<FixedAsset[]>([])
   const [budgets, setBudgets] = useState<Budget[]>([])
   const [goals, setGoals] = useState<SavingsGoal[]>([])
   const [debts, setDebts] = useState<PersonalDebt[]>([])
@@ -121,19 +122,23 @@ export function ManagementPanel({
   const [actionAccountId, setActionAccountId] = useState('')
 
   const [accountForm, setAccountForm] = useState({ name: '', type: 'savings' as Account['account_type'], institution: '', openingBalance: '' })
+  const [assetForm, setAssetForm] = useState({ name: '', type: 'vehicle' as FixedAsset['asset_type'], date: todayISO(), cost: '', currentValue: '', notes: '', purchaseMode: 'already' as 'already' | 'existing' | 'new', existingTransactionId: '', accountId: '' })
+  const [valuationTarget, setValuationTarget] = useState<FixedAsset | null>(null)
+  const [valuationAmount, setValuationAmount] = useState('')
   const [cardForm, setCardForm] = useState({ name: '', institution: '', creditLimit: '', currentBalance: '', cutoffDay: '15', paymentDay: '25' })
   const [budgetForm, setBudgetForm] = useState({ category: 'Hogar', month: currentMonthKey(), limit: '' })
   const [goalForm, setGoalForm] = useState({ name: '', target: '', current: '', targetDate: '' })
   const [debtForm, setDebtForm] = useState({ creditor: '', description: '', principal: '', outstanding: '', annualRate: '', minimumPayment: '', dueDay: '15' })
 
   const loadExtras = useCallback(async () => {
-    const [cardResult, budgetResult, goalResult, debtResult] = await Promise.all([
+    const [cardResult, budgetResult, goalResult, debtResult, assetResult] = await Promise.all([
       supabase.from('credit_cards').select('*').order('created_at', { ascending: false }),
       supabase.from('budgets').select('*').order('month', { ascending: false }),
       supabase.from('savings_goals').select('*').order('created_at', { ascending: false }),
       supabase.from('personal_debts').select('*').order('created_at', { ascending: false }),
+      supabase.from('fixed_assets').select('*').order('created_at', { ascending: false }),
     ])
-    const error = cardResult.error || budgetResult.error || goalResult.error || debtResult.error
+    const error = cardResult.error || budgetResult.error || goalResult.error || debtResult.error || assetResult.error
     if (error) {
       notify(`No se pudieron cargar los módulos gerenciales: ${error.message}`)
       return
@@ -142,6 +147,7 @@ export function ManagementPanel({
     setBudgets((budgetResult.data ?? []) as Budget[])
     setGoals((goalResult.data ?? []) as SavingsGoal[])
     setDebts((debtResult.data ?? []) as PersonalDebt[])
+    setFixedAssets((assetResult.data ?? []) as FixedAsset[])
   }, [notify, supabase])
 
   useEffect(() => { void loadExtras() }, [loadExtras])
@@ -149,25 +155,26 @@ export function ManagementPanel({
 
   const accountBalances = useMemo(() => accounts.map((account) => {
     const movement = transactions.filter((tx) => tx.account_id === account.id).reduce((sum, tx) => {
-      if (isCashIn(tx.kind)) return sum + Number(tx.amount)
-      if (isCashOut(tx.kind)) return sum - Number(tx.amount)
+      if (cashDirection(tx) === 'in') return sum + Number(tx.amount)
+      if (cashDirection(tx) === 'out') return sum - Number(tx.amount)
       return sum
     }, 0)
     return { ...account, balance: Number(account.opening_balance) + movement }
   }), [accounts, transactions])
 
   const unassignedCash = useMemo(() => transactions.filter((tx) => !tx.account_id).reduce((sum, tx) => {
-    if (isCashIn(tx.kind)) return sum + Number(tx.amount)
-    if (isCashOut(tx.kind)) return sum - Number(tx.amount)
+    if (cashDirection(tx) === 'in') return sum + Number(tx.amount)
+    if (cashDirection(tx) === 'out') return sum - Number(tx.amount)
     return sum
   }, 0), [transactions])
 
   const cashTotal = accountBalances.reduce((sum, account) => sum + account.balance, 0) + unassignedCash
   const investmentAssets = investments.filter((item) => item.status === 'active' || item.status === 'matured').reduce((sum, item) => sum + Number(item.principal), 0)
+  const fixedAssetValue = fixedAssets.reduce((sum, item) => sum + Number(item.current_value), 0)
   const receivableAssets = installments.filter((item) => item.status !== 'paid').reduce((sum, item) => sum + Number(item.principal_amount), 0)
   const cardLiabilities = creditCards.filter((item) => item.active).reduce((sum, item) => sum + Number(item.current_balance), 0)
   const debtLiabilities = debts.filter((item) => item.status === 'active').reduce((sum, item) => sum + Number(item.outstanding_balance), 0)
-  const totalAssets = cashTotal + investmentAssets + receivableAssets
+  const totalAssets = cashTotal + investmentAssets + receivableAssets + fixedAssetValue
   const totalLiabilities = cardLiabilities + debtLiabilities
   const netWorth = totalAssets - totalLiabilities
 
@@ -206,8 +213,8 @@ export function ManagementPanel({
 
   const report = useMemo(() => {
     const tx = transactions.filter((item) => monthKey(item.transaction_date) === reportMonth)
-    const inflow = tx.filter((item) => isCashIn(item.kind)).reduce((sum, item) => sum + Number(item.amount), 0)
-    const outflow = tx.filter((item) => isCashOut(item.kind)).reduce((sum, item) => sum + Number(item.amount), 0)
+    const inflow = tx.filter((item) => externalFlowDirection(item) === 'in').reduce((sum, item) => sum + Number(item.amount), 0)
+    const outflow = tx.filter((item) => externalFlowDirection(item) === 'out').reduce((sum, item) => sum + Number(item.amount), 0)
     const income = tx.filter((item) => item.kind === 'income').reduce((sum, item) => sum + Number(item.amount), 0)
     const expense = tx.filter((item) => item.kind === 'expense').reduce((sum, item) => sum + Number(item.amount), 0)
     const categoryMap = new Map<string, number>()
@@ -229,6 +236,55 @@ export function ManagementPanel({
     setForm(null)
     notify('Cuenta creada.')
     await onDataChanged()
+  }
+
+  async function saveAsset() {
+    const cost = Number(assetForm.cost)
+    const currentValue = Number(assetForm.currentValue)
+    const existingExpense = transactions.find((tx) => tx.id === assetForm.existingTransactionId && tx.kind === 'expense')
+    if (!assetForm.name.trim() || !assetForm.date || !Number.isFinite(cost) || cost < 0 || !Number.isFinite(currentValue) || currentValue < 0 || (assetForm.purchaseMode === 'new' && cost <= 0) || (assetForm.purchaseMode === 'existing' && (!existingExpense || Number(existingExpense.amount) !== cost || existingExpense.transaction_date !== assetForm.date))) {
+      notify('Completa el bien, fecha y valores válidos.')
+      return
+    }
+    if (assetForm.purchaseMode === 'new' && assetForm.accountId) {
+      const source = accountBalances.find((account) => account.id === assetForm.accountId)
+      if (!source || source.balance < cost) {
+        notify('La cuenta de origen no tiene saldo suficiente.')
+        return
+      }
+    }
+    setSaving(true)
+    const { error } = await supabase.rpc('register_fixed_asset', {
+      p_name: assetForm.name.trim(),
+      p_asset_type: assetForm.type,
+      p_acquisition_date: assetForm.date,
+      p_acquisition_cost: cost,
+      p_current_value: currentValue,
+      p_account_id: assetForm.purchaseMode === 'new' ? assetForm.accountId || null : null,
+      p_record_cash_outflow: assetForm.purchaseMode === 'new',
+      p_notes: assetForm.notes.trim() || null,
+      p_existing_transaction_id: assetForm.purchaseMode === 'existing' ? assetForm.existingTransactionId : null,
+    })
+    setSaving(false)
+    if (error) return notify(error.message)
+    setAssetForm({ name: '', type: 'vehicle', date: todayISO(), cost: '', currentValue: '', notes: '', purchaseMode: 'already', existingTransactionId: '', accountId: '' })
+    setForm(null)
+    notify('Bien incluido en el patrimonio.')
+    await loadExtras()
+    await onDataChanged()
+  }
+
+  async function saveValuation() {
+    if (!valuationTarget) return
+    const value = Number(valuationAmount)
+    if (!Number.isFinite(value) || value < 0) return notify('Indica un valor estimado válido.')
+    setSaving(true)
+    const { error } = await supabase.from('fixed_assets').update({ current_value: value }).eq('id', valuationTarget.id).select('id').single()
+    setSaving(false)
+    if (error) return notify(error.message)
+    setValuationTarget(null)
+    notify('Valor del bien actualizado.')
+    await loadExtras()
   }
 
   async function saveCard() {
@@ -389,6 +445,7 @@ export function ManagementPanel({
       ]),
       excelSheet('Movimientos', report.tx.map((tx) => ({ Fecha: tx.transaction_date, Tipo: tx.kind, Descripcion: tx.description, Categoria: tx.category, Valor: Number(tx.amount) }))),
       excelSheet('Cuentas', accountBalances.map((item) => ({ Cuenta: item.name, Tipo: accountTypeLabel(item.account_type), Entidad: item.institution ?? '', Saldo: item.balance }))),
+      excelSheet('Bienes', fixedAssets.map((item) => ({ Bien: item.name, Tipo: item.asset_type, FechaCompra: item.acquisition_date, Costo: Number(item.acquisition_cost), ValorActual: Number(item.current_value) }))),
       excelSheet('Tarjetas', creditCards.map((item) => ({ Tarjeta: item.name, Entidad: item.institution, Cupo: Number(item.credit_limit), Saldo: Number(item.current_balance), Disponible: Number(item.credit_limit) - Number(item.current_balance) }))),
       excelSheet('Presupuesto', budgetRows.filter((item) => monthKey(item.month) === reportMonth).map((item) => ({ Categoria: item.category, Presupuesto: Number(item.limit_amount), Ejecutado: item.spent, Disponible: item.available, Porcentaje: Math.round(item.percentage) }))),
       excelSheet('Metas', goals.map((item) => ({ Meta: item.name, Objetivo: Number(item.target_amount), Acumulado: Number(item.current_amount), FechaObjetivo: item.target_date ?? '', Estado: item.status }))),
@@ -450,6 +507,7 @@ export function ManagementPanel({
       { text: '' },
       { text: 'Situacion patrimonial', size: 13 },
       { text: `Activos: ${formatCOP(totalAssets)}` },
+      { text: `Bienes: ${formatCOP(fixedAssetValue)}` },
       { text: `Pasivos: ${formatCOP(totalLiabilities)}` },
       { text: `Patrimonio neto: ${formatCOP(netWorth)}` },
       { text: '' },
@@ -460,7 +518,7 @@ export function ManagementPanel({
   }
 
   const tabs: Array<{ key: Section; label: string }> = [
-    ['overview', 'Resumen'], ['accounts', 'Cuentas'], ['cards', 'Tarjetas'], ['budgets', 'Presupuestos'], ['goals', 'Metas'], ['debts', 'Deudas'], ['reports', 'Reportes'],
+    ['overview', 'Resumen'], ['accounts', 'Cuentas'], ['assets', 'Bienes'], ['cards', 'Tarjetas'], ['budgets', 'Presupuestos'], ['goals', 'Metas'], ['debts', 'Deudas'], ['reports', 'Reportes'],
   ].map(([key, label]) => ({ key: key as Section, label }))
 
   return (
@@ -471,7 +529,7 @@ export function ManagementPanel({
         <>
           <section className="metrics management-metrics">
             <MetricCard label="Patrimonio neto" value={formatCOP(netWorth)} note="Activos menos obligaciones" highlight />
-            <MetricCard label="Activos" value={formatCOP(totalAssets)} note="Caja + inversiones + capital por cobrar" />
+            <MetricCard label="Activos" value={formatCOP(totalAssets)} note="Dinero + bienes + inversiones + cartera" />
             <MetricCard label="Pasivos" value={formatCOP(totalLiabilities)} note="Tarjetas + deudas propias" />
             <MetricCard label="Caja disponible" value={formatCOP(cashTotal)} note={unassignedCash !== 0 ? `Incluye ${formatCOP(unassignedCash)} sin asignar` : 'Saldos por cuenta'} />
           </section>
@@ -486,6 +544,7 @@ export function ManagementPanel({
               <div className="panel-header"><div><h2>Distribución</h2><span>Foto financiera actual</span></div></div>
               <div className="stack-list">
                 <StackRow label="Cuentas y efectivo" value={cashTotal} total={Math.max(totalAssets, 1)} />
+                <StackRow label="Bienes" value={fixedAssetValue} total={Math.max(totalAssets, 1)} />
                 <StackRow label="Inversiones" value={investmentAssets} total={Math.max(totalAssets, 1)} />
                 <StackRow label="Capital por cobrar" value={receivableAssets} total={Math.max(totalAssets, 1)} />
                 <StackRow label="Tarjetas" value={cardLiabilities} total={Math.max(totalLiabilities, 1)} danger />
@@ -502,6 +561,23 @@ export function ManagementPanel({
           <div className="cards-list">
             {accountBalances.map((account) => <article className="entity-card" key={account.id}><div className="entity-top"><div><h3>{account.name}</h3><div className="sub">{account.institution || accountTypeLabel(account.account_type)}</div></div><span className="badge active">{accountTypeLabel(account.account_type)}</span></div><div className="entity-number">{formatCOP(account.balance)}</div><div className="sub">Saldo inicial: {formatCOP(account.opening_balance)}</div></article>)}
             {accounts.length === 0 ? <div className="panel empty">Crea tu primera cuenta para separar efectivo, banco y billeteras digitales.</div> : null}
+          </div>
+        </section>
+      ) : null}
+
+      {section === 'assets' ? (
+        <section className="section">
+          <div className="section-title"><div><h2>Bienes del patrimonio</h2><p>Carros, inmuebles y otros bienes. Su valor actual se suma al patrimonio.</p></div><button className="button primary" onClick={() => setForm('asset')}>+ Bien</button></div>
+          <div className="cards-list">
+            {fixedAssets.length === 0 ? <div className="panel empty">Agrega un bien que ya tengas o registra una compra nueva.</div> : fixedAssets.map((asset) => (
+              <article className="entity-card" key={asset.id}>
+                <div className="entity-top"><div><h3>{asset.name}</h3><div className="sub">{asset.asset_type === 'vehicle' ? 'Vehículo' : asset.asset_type === 'property' ? 'Inmueble' : asset.asset_type === 'equipment' ? 'Equipo' : 'Otro bien'} · {shortDate(asset.acquisition_date)}</div></div><span className="badge active">Activo</span></div>
+                <div className="entity-number">{formatCOP(asset.current_value)}</div><div className="sub">Valor actual estimado</div>
+                <div className="entity-stats"><div className="entity-stat"><span>Costo de compra</span><strong>{formatCOP(asset.acquisition_cost)}</strong></div><div className="entity-stat"><span>Diferencia de valor</span><strong>{formatCOP(Number(asset.current_value) - Number(asset.acquisition_cost))}</strong></div></div>
+                {asset.notes ? <div className="sub" style={{ marginTop: 12 }}>{asset.notes}</div> : null}
+                <div className="entity-actions"><button className="button secondary small" onClick={() => { setValuationTarget(asset); setValuationAmount(String(asset.current_value)) }}>Actualizar valor</button></div>
+              </article>
+            ))}
           </div>
         </section>
       ) : null}
@@ -550,6 +626,27 @@ export function ManagementPanel({
       ) : null}
 
       {form === 'account' ? <Modal title="Nueva cuenta" onClose={() => setForm(null)}><div className="form-grid"><Field label="Nombre"><input value={accountForm.name} onChange={(e) => setAccountForm((v) => ({ ...v, name: e.target.value }))} placeholder="Ej. Bancolombia ahorros" /></Field><Field label="Tipo"><select value={accountForm.type} onChange={(e) => setAccountForm((v) => ({ ...v, type: e.target.value as Account['account_type'] }))}><option value="savings">Ahorros</option><option value="checking">Corriente</option><option value="cash">Efectivo</option><option value="wallet">Billetera digital</option></select></Field><Field label="Entidad"><input value={accountForm.institution} onChange={(e) => setAccountForm((v) => ({ ...v, institution: e.target.value }))} placeholder="Opcional" /></Field><Field label="Saldo inicial"><input type="number" min="0" value={accountForm.openingBalance} onChange={(e) => setAccountForm((v) => ({ ...v, openingBalance: e.target.value }))} /></Field></div><Footer saving={saving} onCancel={() => setForm(null)} onSave={saveAccount} /></Modal> : null}
+
+      {form === 'asset' ? <Modal title="Agregar bien al patrimonio" onClose={() => setForm(null)}>
+        <div className="form-grid">
+          <Field label="Nombre del bien"><input autoFocus value={assetForm.name} onChange={(e) => setAssetForm((v) => ({ ...v, name: e.target.value }))} placeholder="Ej. Carro familiar" /></Field>
+          <Field label="Tipo"><select value={assetForm.type} onChange={(e) => setAssetForm((v) => ({ ...v, type: e.target.value as FixedAsset['asset_type'] }))}><option value="vehicle">Vehículo</option><option value="property">Inmueble</option><option value="equipment">Equipo</option><option value="other">Otro</option></select></Field>
+          <Field label="Cómo registrar la compra"><select value={assetForm.purchaseMode} onChange={(e) => setAssetForm((v) => ({ ...v, purchaseMode: e.target.value as 'already' | 'existing' | 'new', existingTransactionId: '', date: todayISO(), cost: '', currentValue: '' }))}><option value="already">Ya tenía el bien; no registrar otra salida</option><option value="existing">Convertir un gasto ya registrado</option><option value="new">Registrar compra y salida de dinero ahora</option></select></Field>
+          {assetForm.purchaseMode === 'existing' ? <Field label="Gasto a convertir"><select value={assetForm.existingTransactionId} onChange={(e) => {
+            const transaction = transactions.find((tx) => tx.id === e.target.value && tx.kind === 'expense')
+            setAssetForm((v) => ({ ...v, existingTransactionId: e.target.value, date: transaction?.transaction_date || todayISO(), cost: transaction ? String(transaction.amount) : '', currentValue: transaction ? String(transaction.amount) : '' }))
+          }}><option value="">Selecciona el gasto</option>{transactions.filter((tx) => tx.kind === 'expense').map((tx) => <option key={tx.id} value={tx.id}>{tx.transaction_date} · {tx.description} · {formatCOP(tx.amount)}</option>)}</select></Field> : null}
+          <Field label="Fecha de adquisición"><input type="date" disabled={assetForm.purchaseMode === 'existing'} value={assetForm.date} onChange={(e) => setAssetForm((v) => ({ ...v, date: e.target.value }))} /></Field>
+          <Field label="Costo de compra"><input type="number" min="0" step="0.01" disabled={assetForm.purchaseMode === 'existing'} value={assetForm.cost} onChange={(e) => setAssetForm((v) => ({ ...v, cost: e.target.value, currentValue: v.currentValue || e.target.value }))} /></Field>
+          <Field label="Valor actual estimado"><input type="number" min="0" step="0.01" value={assetForm.currentValue} onChange={(e) => setAssetForm((v) => ({ ...v, currentValue: e.target.value }))} /></Field>
+          {assetForm.purchaseMode === 'new' ? <Field label="Cuenta desde la que se pagó"><select value={assetForm.accountId} onChange={(e) => setAssetForm((v) => ({ ...v, accountId: e.target.value }))}><option value="">Dinero sin cuenta asignada</option>{accountBalances.filter((account) => account.active).map((account) => <option key={account.id} value={account.id}>{account.name} · {formatCOP(account.balance)}</option>)}</select></Field> : null}
+          <Field label="Notas"><input value={assetForm.notes} onChange={(e) => setAssetForm((v) => ({ ...v, notes: e.target.value }))} placeholder="Opcional" /></Field>
+        </div>
+        <p className="sub" style={{ marginTop: 12 }}>Para el carro que ya aparece como gasto, elige “Convertir un gasto ya registrado”. Se conserva la salida de dinero y se retira del total de gastos.</p>
+        <Footer saving={saving} onCancel={() => setForm(null)} onSave={saveAsset} />
+      </Modal> : null}
+
+      {valuationTarget ? <Modal title={`Actualizar valor de ${valuationTarget.name}`} onClose={() => setValuationTarget(null)}><div className="form-grid"><Field label="Valor actual estimado"><input autoFocus type="number" min="0" step="0.01" value={valuationAmount} onChange={(e) => setValuationAmount(e.target.value)} /></Field></div><Footer saving={saving} onCancel={() => setValuationTarget(null)} onSave={saveValuation} /></Modal> : null}
 
       {form === 'card' ? <Modal title="Nueva tarjeta" onClose={() => setForm(null)}><div className="form-grid"><Field label="Nombre"><input value={cardForm.name} onChange={(e) => setCardForm((v) => ({ ...v, name: e.target.value }))} placeholder="Ej. Visa Oro" /></Field><Field label="Banco"><input value={cardForm.institution} onChange={(e) => setCardForm((v) => ({ ...v, institution: e.target.value }))} /></Field><Field label="Cupo total"><input type="number" min="0" value={cardForm.creditLimit} onChange={(e) => setCardForm((v) => ({ ...v, creditLimit: e.target.value }))} /></Field><Field label="Saldo utilizado"><input type="number" min="0" value={cardForm.currentBalance} onChange={(e) => setCardForm((v) => ({ ...v, currentBalance: e.target.value }))} /></Field><Field label="Día de corte"><input type="number" min="1" max="28" value={cardForm.cutoffDay} onChange={(e) => setCardForm((v) => ({ ...v, cutoffDay: e.target.value }))} /></Field><Field label="Día de pago"><input type="number" min="1" max="28" value={cardForm.paymentDay} onChange={(e) => setCardForm((v) => ({ ...v, paymentDay: e.target.value }))} /></Field></div><Footer saving={saving} onCancel={() => setForm(null)} onSave={saveCard} /></Modal> : null}
 

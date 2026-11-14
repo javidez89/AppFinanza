@@ -5,11 +5,12 @@ import { createClient } from '@/lib/supabase/client'
 import { buildLoanSchedule, calculateCdtReturn, formatCOP, type InterestRateType, type LoanFrequency } from '@/lib/finance'
 import { ManagementPanel } from '@/components/management-panel'
 import { appPath } from '@/lib/app-path'
+import { accountCashEntries, cashDirection, externalFlowDirection, transactionLabel } from '@/lib/finance/transaction-flow'
 
-type View = 'dashboard' | 'movements' | 'loans' | 'investments' | 'management'
-type Modal = null | 'income' | 'expense' | 'loan' | 'investment'
+type View = 'dashboard' | 'movements' | 'cash-box' | 'loans' | 'investments' | 'management'
+type Modal = null | 'income' | 'expense' | 'cash-box-entry' | 'loan' | 'investment'
 
-type TransactionKind = 'income' | 'expense' | 'loan_out' | 'loan_payment' | 'investment_out' | 'investment_return' | 'debt_payment'
+type TransactionKind = 'income' | 'expense' | 'transfer' | 'loan_out' | 'loan_payment' | 'investment_out' | 'investment_return' | 'debt_payment'
 
 type Transaction = {
   id: string
@@ -32,6 +33,7 @@ type Account = {
   institution: string | null
   opening_balance: number
   active: boolean
+  notes: string | null
 }
 
 type Loan = {
@@ -95,16 +97,6 @@ const nextMonthISO = () => {
   return date.toISOString().slice(0, 10)
 }
 
-const kindMeta: Record<TransactionKind, { label: string; direction: 'in' | 'out' }> = {
-  income: { label: 'Ingreso', direction: 'in' },
-  expense: { label: 'Gasto', direction: 'out' },
-  loan_out: { label: 'Préstamo entregado', direction: 'out' },
-  loan_payment: { label: 'Cuota cobrada', direction: 'in' },
-  investment_out: { label: 'Inversión', direction: 'out' },
-  investment_return: { label: 'Redención inversión', direction: 'in' },
-  debt_payment: { label: 'Pago de deuda', direction: 'out' },
-}
-
 function monthKey(date: string) {
   return date.slice(0, 7)
 }
@@ -119,14 +111,6 @@ function monthLabel(key: string) {
   return new Intl.DateTimeFormat('es-CO', { month: 'short' })
     .format(new Date(year, month - 1, 1))
     .replace('.', '')
-}
-
-function isCashIn(kind: TransactionKind) {
-  return kind === 'income' || kind === 'loan_payment' || kind === 'investment_return'
-}
-
-function isCashOut(kind: TransactionKind) {
-  return kind === 'expense' || kind === 'loan_out' || kind === 'investment_out' || kind === 'debt_payment'
 }
 
 export function DashboardClient({ email, name }: { email: string; name: string }) {
@@ -148,8 +132,10 @@ export function DashboardClient({ email, name }: { email: string; name: string }
   const [movementForm, setMovementForm] = useState({
     description: '', amount: '', category: 'General', date: todayISO(), notes: '', accountId: '',
   })
+  const [cashBoxAction, setCashBoxAction] = useState<'deposit' | 'withdrawal'>('deposit')
+  const [cashBoxForm, setCashBoxForm] = useState({ amount: '', date: todayISO(), notes: '', sourceAccountId: '' })
   const [loanForm, setLoanForm] = useState({
-    borrower: '', contact: '', description: '', principal: '', rate: '', rateType: 'monthly' as InterestRateType,
+    borrower: '', contact: '', description: '', principal: '', rate: '', rateType: 'total' as InterestRateType,
     frequency: 'monthly' as LoanFrequency, installments: '6', startDate: todayISO(), firstDueDate: nextMonthISO(), accountId: '',
   })
   const [investmentForm, setInvestmentForm] = useState({
@@ -207,11 +193,19 @@ export function DashboardClient({ email, name }: { email: string; name: string }
   }, [])
 
   const currentMonth = todayISO().slice(0, 7)
+  const cashBox = accounts.find((account) => account.notes === 'appfinanza:cash-box')
+  const cashBoxEntries = accountCashEntries(transactions, cashBox?.id)
+  const accountBalance = (account: Account) => accountCashEntries(transactions, account.id)
+    .reduce((balance, tx) => {
+      const direction = cashDirection(tx)
+      return balance + (direction === 'in' ? Number(tx.amount) : direction === 'out' ? -Number(tx.amount) : 0)
+    }, Number(account.opening_balance))
+  const cashBoxBalance = cashBox ? accountBalance(cashBox) : 0
   const metrics = useMemo(() => {
     const openingBalances = accounts.reduce((sum, account) => sum + Number(account.opening_balance), 0)
     const cash = transactions.reduce((sum, tx) => {
-      if (isCashIn(tx.kind)) return sum + Number(tx.amount)
-      if (isCashOut(tx.kind)) return sum - Number(tx.amount)
+      if (cashDirection(tx) === 'in') return sum + Number(tx.amount)
+      if (cashDirection(tx) === 'out') return sum - Number(tx.amount)
       return sum
     }, openingBalances)
 
@@ -243,8 +237,8 @@ export function DashboardClient({ email, name }: { email: string; name: string }
       return {
         key,
         label: monthLabel(key),
-        inflow: monthTx.filter((tx) => isCashIn(tx.kind)).reduce((sum, tx) => sum + Number(tx.amount), 0),
-        outflow: monthTx.filter((tx) => isCashOut(tx.kind)).reduce((sum, tx) => sum + Number(tx.amount), 0),
+        inflow: monthTx.filter((tx) => externalFlowDirection(tx) === 'in').reduce((sum, tx) => sum + Number(tx.amount), 0),
+        outflow: monthTx.filter((tx) => externalFlowDirection(tx) === 'out').reduce((sum, tx) => sum + Number(tx.amount), 0),
       }
     })
     const max = Math.max(1, ...rows.flatMap((row) => [row.inflow, row.outflow]))
@@ -255,19 +249,27 @@ export function DashboardClient({ email, name }: { email: string; name: string }
     return installments.filter((item) => item.status !== 'paid').slice(0, 5)
   }, [installments])
 
-  const loanPreview = useMemo(() => {
+  const { preview: loanPreview, error: loanValidationError } = useMemo(() => {
     const principal = Number(loanForm.principal)
     const rate = Number(loanForm.rate)
     const count = Number(loanForm.installments)
-    if (!principal || principal <= 0 || Number.isNaN(rate) || !count || count <= 0 || !loanForm.firstDueDate) return null
-    return buildLoanSchedule({
-      principal,
-      interestRate: rate,
-      interestRateType: loanForm.rateType,
-      installments: count,
-      frequency: loanForm.frequency,
-      firstDueDate: loanForm.firstDueDate,
-    })
+    if (!loanForm.principal || !loanForm.installments || !loanForm.firstDueDate || !loanForm.startDate) return { preview: null, error: '' }
+    try {
+      return {
+        error: '',
+        preview: buildLoanSchedule({
+          principal,
+          interestRate: rate,
+          interestRateType: loanForm.rateType,
+          installments: count,
+          frequency: loanForm.frequency,
+          firstDueDate: loanForm.firstDueDate,
+          startDate: loanForm.startDate,
+        }),
+      }
+    } catch (error) {
+      return { preview: null, error: error instanceof Error ? error.message : 'Revisa los datos del préstamo.' }
+    }
   }, [loanForm])
 
   const investmentPreview = useMemo(() => {
@@ -337,23 +339,22 @@ export function DashboardClient({ email, name }: { email: string; name: string }
 
   async function saveMovement(kind: 'income' | 'expense') {
     const amount = Number(movementForm.amount)
-    if (!movementForm.description.trim() || !amount || amount <= 0) {
-      notify('Escribe una descripción y un valor mayor que cero.')
+    if (!movementForm.description.trim() || !Number.isFinite(amount) || amount <= 0 || !movementForm.date) {
+      notify('Escribe una descripción, una fecha y un valor mayor que cero.')
       return
     }
     setSaving(true)
-    const fields = {
-      kind,
+    const values = {
       description: movementForm.description.trim(),
       category: movementForm.category,
       amount,
       transaction_date: movementForm.date,
       notes: movementForm.notes.trim() || null,
-      account_id: movementForm.accountId || accounts[0]?.id || null,
+      account_id: movementForm.accountId || (editingMovement ? null : accounts[0]?.id || null),
     }
     const result = editingMovement
-      ? await supabase.from('transactions').update(fields).eq('id', editingMovement.id).eq('kind', kind).select('id').maybeSingle()
-      : await supabase.from('transactions').insert(fields).select('id').maybeSingle()
+      ? await supabase.from('transactions').update(values).eq('id', editingMovement.id).eq('kind', kind).select('id').maybeSingle()
+      : await supabase.from('transactions').insert({ ...values, kind }).select('id').maybeSingle()
     setSaving(false)
     if (result.error || !result.data) {
       notify(result.error?.message ?? (editingMovement ? 'No tienes permiso para editar este movimiento.' : 'No fue posible guardar el movimiento.'))
@@ -366,9 +367,76 @@ export function DashboardClient({ email, name }: { email: string; name: string }
     await loadData()
   }
 
+  function openNewMovement(kind: 'income' | 'expense') {
+    setEditingMovement(null)
+    setMovementForm({ description: '', amount: '', category: 'General', date: todayISO(), notes: '', accountId: '' })
+    setModal(kind)
+  }
+
+  async function createCashBox() {
+    if (saving || cashBox) return
+    setSaving(true)
+    const { error } = await supabase.from('accounts').insert({
+      name: 'Dinero en caja', account_type: 'cash', opening_balance: 0, notes: 'appfinanza:cash-box',
+    })
+    setSaving(false)
+    if (error) {
+      notify(error.message)
+      await loadData()
+      return
+    }
+    notify('Caja creada. Ahora puedes ingresar dinero.')
+    await loadData()
+  }
+
+  function openCashBoxEntry(action: 'deposit' | 'withdrawal') {
+    setCashBoxAction(action)
+    setCashBoxForm({ amount: '', date: todayISO(), notes: '', sourceAccountId: '' })
+    setModal('cash-box-entry')
+  }
+
+  async function saveCashBoxEntry() {
+    if (!cashBox || saving) return
+    const amount = Number(cashBoxForm.amount)
+    if (!Number.isFinite(amount) || amount <= 0 || !cashBoxForm.date) {
+      notify('Indica un valor y una fecha válidos.')
+      return
+    }
+    if (cashBoxAction === 'withdrawal' && amount > cashBoxBalance) {
+      notify('El retiro supera el dinero disponible en caja.')
+      return
+    }
+    const source = accounts.find((account) => account.id === cashBoxForm.sourceAccountId && account.id !== cashBox.id)
+    if (cashBoxAction === 'deposit' && cashBoxForm.sourceAccountId && !source) {
+      notify('Selecciona una cuenta de origen válida.')
+      return
+    }
+    if (source && amount > accountBalance(source)) {
+      notify('La cuenta de origen no tiene saldo suficiente.')
+      return
+    }
+    const notes = cashBoxForm.notes.trim() || null
+    const base = { kind: 'transfer', category: 'Caja', amount, transaction_date: cashBoxForm.date, notes }
+    const rows = cashBoxAction === 'withdrawal'
+      ? [{ ...base, description: 'Retiro de mamá', reference_type: 'cash_box_withdrawal', account_id: cashBox.id }]
+      : source
+        ? [
+            { ...base, description: 'Traslado a caja', reference_type: 'cash_box_transfer_out', account_id: source.id },
+            { ...base, description: 'Entrada a caja', reference_type: 'cash_box_transfer_in', account_id: cashBox.id },
+          ]
+        : [{ ...base, description: 'Ingreso a caja', reference_type: 'cash_box_deposit', account_id: cashBox.id }]
+    setSaving(true)
+    const { error } = await supabase.from('transactions').insert(rows)
+    setSaving(false)
+    if (error) return notify(error.message)
+    setModal(null)
+    notify(cashBoxAction === 'withdrawal' ? 'Retiro registrado sin sumarlo a gastos.' : 'Dinero ingresado a caja.')
+    await loadData()
+  }
+
   async function saveLoan() {
     if (!loanPreview || !loanForm.borrower.trim()) {
-      notify('Completa el nombre, capital, interés y número de cuotas.')
+      notify(loanValidationError || 'Completa el nombre, capital, interés y número de cuotas.')
       return
     }
     const principal = Number(loanForm.principal)
@@ -426,7 +494,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
     }
 
     setSaving(false)
-    setLoanForm({ borrower: '', contact: '', description: '', principal: '', rate: '', rateType: 'monthly', frequency: 'monthly', installments: '6', startDate: todayISO(), firstDueDate: nextMonthISO(), accountId: '' })
+    setLoanForm({ borrower: '', contact: '', description: '', principal: '', rate: '', rateType: 'total', frequency: 'monthly', installments: '6', startDate: todayISO(), firstDueDate: nextMonthISO(), accountId: '' })
     setModal(null)
     notify('Préstamo creado con su plan de cuotas.')
     await loadData()
@@ -558,6 +626,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
     const items: Array<{ key: View; label: string }> = [
       { key: 'dashboard', label: 'Dashboard' },
       { key: 'movements', label: 'Movimientos' },
+      { key: 'cash-box', label: 'Caja' },
       { key: 'loans', label: 'Préstamos' },
       { key: 'investments', label: 'Inversiones' },
       { key: 'management', label: 'Gerencia' },
@@ -585,12 +654,12 @@ export function DashboardClient({ email, name }: { email: string; name: string }
       <main className="main">
         <header className="topbar">
           <div>
-            <h1>{view === 'dashboard' ? `Hola, ${name.split(' ')[0]}` : view === 'movements' ? 'Movimientos' : view === 'loans' ? 'Préstamos' : view === 'investments' ? 'Inversiones' : 'Gerencia financiera'}</h1>
+            <h1>{view === 'dashboard' ? `Hola, ${name.split(' ')[0]}` : view === 'movements' ? 'Movimientos' : view === 'cash-box' ? 'Dinero en caja' : view === 'loans' ? 'Préstamos' : view === 'investments' ? 'Inversiones' : 'Gerencia financiera'}</h1>
             <p>{view === 'dashboard' ? 'Una vista clara de tu dinero, cartera e inversiones.' : 'Información compartida entre los dos usuarios autorizados.'}</p>
           </div>
           <div className="top-actions">
-            <button className="button secondary" onClick={() => setModal('expense')}>+ Gasto</button>
-            <button className="button primary" onClick={() => setModal('income')}>+ Ingreso</button>
+            <button className="button secondary" onClick={() => openNewMovement('expense')}>+ Gasto</button>
+            <button className="button primary" onClick={() => openNewMovement('income')}>+ Ingreso</button>
           </div>
         </header>
 
@@ -606,7 +675,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
         {!loading && view === 'dashboard' ? (
           <>
             <section className="metrics">
-              <MetricCard label="Saldo de caja" value={formatCOP(metrics.cash)} note="Cuentas + flujo acumulado" highlight />
+              <MetricCard label="Dinero disponible" value={formatCOP(metrics.cash)} note="Cuentas + efectivo" highlight />
               <MetricCard label="Ingresos del mes" value={formatCOP(metrics.income)} note="Ingresos normales" />
               <MetricCard label="Gastos del mes" value={formatCOP(metrics.expense)} note="Gastos registrados" />
               <MetricCard label="Por cobrar" value={formatCOP(metrics.receivable)} note="Cuotas pendientes" />
@@ -653,8 +722,8 @@ export function DashboardClient({ email, name }: { email: string; name: string }
               <div className="panel">
                 <div className="panel-header"><div><h2>Acciones rápidas</h2><span>Registrar en segundos</span></div></div>
                 <div className="quick-list">
-                  <QuickAction initials="IN" title="Nuevo ingreso" text="Salario, venta, devolución…" onClick={() => setModal('income')} />
-                  <QuickAction initials="GA" title="Nuevo gasto" text="Compra, servicio, pago…" onClick={() => setModal('expense')} />
+                  <QuickAction initials="IN" title="Nuevo ingreso" text="Salario, venta, devolución…" onClick={() => openNewMovement('income')} />
+                  <QuickAction initials="GA" title="Nuevo gasto" text="Compra, servicio, pago…" onClick={() => openNewMovement('expense')} />
                   <QuickAction initials="PR" title="Prestar dinero" text="Cuotas e interés automático" onClick={() => setModal('loan')} />
                   <QuickAction initials="CD" title="Registrar CDT" text="Tasa E.A. y rendimiento" onClick={() => setModal('investment')} />
                 </div>
@@ -667,7 +736,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
           <section className="section">
             <div className="section-title">
               <div><h2>Todos los movimientos</h2><p>Incluye operaciones normales y movimientos automáticos de préstamos e inversiones.</p></div>
-              <div style={{ display: 'flex', gap: 8 }}><button className="button secondary" onClick={() => setModal('expense')}>+ Gasto</button><button className="button primary" onClick={() => setModal('income')}>+ Ingreso</button></div>
+              <div style={{ display: 'flex', gap: 8 }}><button className="button secondary" onClick={() => openNewMovement('expense')}>+ Gasto</button><button className="button primary" onClick={() => openNewMovement('income')}>+ Ingreso</button></div>
             </div>
             <div className="table-wrap">
               <table>
@@ -676,16 +745,38 @@ export function DashboardClient({ email, name }: { email: string; name: string }
                   {transactions.length === 0 ? <tr><td colSpan={canManageCashflow ? 6 : 5} className="empty">Aún no hay movimientos.</td></tr> : transactions.map((tx) => (
                     <tr key={tx.id}>
                       <td>{shortDate(tx.transaction_date)}</td>
-                      <td><span className={`badge ${isCashIn(tx.kind) ? 'paid' : 'pending'}`}>{kindMeta[tx.kind].label}</span></td>
+                      <td><span className={`badge ${cashDirection(tx) === 'in' ? 'paid' : 'pending'}`}>{transactionLabel(tx)}</span></td>
                       <td><strong>{tx.description}</strong>{tx.notes ? <div className="sub">{tx.notes}</div> : null}</td>
                       <td>{tx.category}</td>
-                      <td className={isCashIn(tx.kind) ? 'amount-positive' : 'amount-negative'}>{isCashIn(tx.kind) ? '+' : '-'} {formatCOP(tx.amount)}</td>
+                      <td className={cashDirection(tx) === 'in' ? 'amount-positive' : 'amount-negative'}>{cashDirection(tx) === 'in' ? '+' : '-'} {formatCOP(tx.amount)}</td>
                       {canManageCashflow ? <td>{tx.kind === 'income' || tx.kind === 'expense' ? <div className="row-actions"><button className="button secondary small" disabled={saving} onClick={() => startEditingMovement(tx)}>Editar</button><button className="button danger small" disabled={saving} onClick={() => void deleteMovement(tx)}>Eliminar</button></div> : <span className="sub">Automático</span>}</td> : null}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+          </section>
+        ) : null}
+
+        {!loading && view === 'cash-box' ? (
+          <section className="section">
+            <div className="section-title">
+              <div><h2>Caja de mamá</h2><p>Controla el efectivo que ella puede usar. Los retiros reducen el saldo sin sumarse a gastos.</p></div>
+              {cashBox ? <div className="top-actions cash-box-actions"><button className="button secondary" onClick={() => openCashBoxEntry('deposit')}>+ Ingresar dinero</button><button className="button primary" onClick={() => openCashBoxEntry('withdrawal')}>Registrar retiro</button></div> : null}
+            </div>
+            {cashBox ? <>
+              <div className="cash-box-summary"><span>Disponible en caja</span><strong>{formatCOP(cashBoxBalance)}</strong><small>Saldo inicial: {formatCOP(cashBox.opening_balance)}. El saldo incluye todas las entradas y salidas de esta cuenta, también gastos y préstamos.</small></div>
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>Fecha</th><th>Movimiento</th><th>Detalle</th><th>Valor</th></tr></thead>
+                  <tbody>
+                    {cashBoxEntries.length === 0 ? <tr><td colSpan={4} className="empty">Aún no hay movimientos en caja.</td></tr> : cashBoxEntries.map((tx) => (
+                      <tr key={tx.id}><td>{shortDate(tx.transaction_date)}</td><td>{transactionLabel(tx)}</td><td><div>{tx.description}</div>{tx.notes ? <div className="sub">{tx.notes}</div> : null}</td><td className={cashDirection(tx) === 'in' ? 'amount-positive' : 'amount-negative'}>{cashDirection(tx) === 'in' ? '+' : '-'} {formatCOP(tx.amount)}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </> : <div className="panel empty"><p>Crea la caja para registrar el dinero que recibe y retira tu mamá.</p><button className="button primary" disabled={saving} onClick={createCashBox}>{saving ? 'Creando…' : 'Crear caja'}</button></div>}
           </section>
         ) : null}
 
@@ -702,6 +793,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
                 return (
                   <article className="entity-card" key={loan.id}>
                     <div className="entity-top"><div><h3>{loan.borrower_name}</h3><div className="sub">{loan.description || 'Préstamo personal'} · {loan.installments_count} cuotas</div></div><span className={`badge ${loan.status === 'active' ? 'active' : 'paid'}`}>{loan.status === 'active' ? 'Activo' : 'Pagado'}</span></div>
+                    <p className="sub">Interés: {Number(loan.interest_rate)} % · {loan.interest_rate_type === 'total' ? 'sobre el capital, una sola vez' : loan.interest_rate_type === 'monthly' ? 'mensual sobre saldo' : 'efectivo anual sobre saldo'}</p>
                     <div className="entity-number">{formatCOP(pending)}</div><div className="sub">Pendiente por cobrar</div>
                     <div className="progress"><div style={{ width: `${progress}%` }} /></div>
                     <div className="entity-stats">
@@ -765,10 +857,23 @@ export function DashboardClient({ email, name }: { email: string; name: string }
             <Field label="Valor"><input type="number" min="0" inputMode="decimal" value={movementForm.amount} onChange={(e) => setMovementForm((form) => ({ ...form, amount: e.target.value }))} placeholder="0" /></Field>
             <Field label="Fecha"><input type="date" value={movementForm.date} onChange={(e) => setMovementForm((form) => ({ ...form, date: e.target.value }))} /></Field>
             <Field label="Categoría"><select value={movementForm.category} onChange={(e) => setMovementForm((form) => ({ ...form, category: e.target.value }))}><option>General</option><option>Salario</option><option>Ventas</option><option>Hogar</option><option>Mercado</option><option>Transporte</option><option>Servicios</option><option>Salud</option><option>Ocio</option><option>Educación</option><option>Otros</option></select></Field>
-            <Field label="Cuenta"><select value={movementForm.accountId} onChange={(e) => setMovementForm((form) => ({ ...form, accountId: e.target.value }))}><option value="">{accounts.length ? 'Cuenta principal' : 'Sin asignar'}</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field>
+            <Field label="Cuenta"><select value={movementForm.accountId} onChange={(e) => setMovementForm((form) => ({ ...form, accountId: e.target.value }))}><option value="">{editingMovement || !accounts.length ? 'Sin asignar' : 'Cuenta principal'}</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field>
             <Field label="Notas"><input value={movementForm.notes} onChange={(e) => setMovementForm((form) => ({ ...form, notes: e.target.value }))} placeholder="Opcional" /></Field>
           </div>
           <div className="form-footer"><button className="button secondary" onClick={closeMovementModal}>Cancelar</button><button className="button primary" disabled={saving} onClick={() => saveMovement(modal)}>{saving ? 'Guardando…' : editingMovement ? 'Guardar cambios' : 'Guardar'}</button></div>
+        </ModalShell>
+      ) : null}
+
+      {modal === 'cash-box-entry' ? (
+        <ModalShell title={cashBoxAction === 'deposit' ? 'Ingresar dinero a caja' : 'Registrar retiro de mamá'} onClose={() => setModal(null)}>
+          <div className="form-grid">
+            <Field label="Valor"><input autoFocus type="number" min="0.01" step="0.01" inputMode="decimal" value={cashBoxForm.amount} onChange={(e) => setCashBoxForm((form) => ({ ...form, amount: e.target.value }))} placeholder="0" /></Field>
+            <Field label="Fecha"><input type="date" value={cashBoxForm.date} onChange={(e) => setCashBoxForm((form) => ({ ...form, date: e.target.value }))} /></Field>
+            {cashBoxAction === 'deposit' ? <Field label="Origen del dinero"><select value={cashBoxForm.sourceAccountId} onChange={(e) => setCashBoxForm((form) => ({ ...form, sourceAccountId: e.target.value }))}><option value="">Dinero recibido fuera de las cuentas</option>{accounts.filter((account) => account.id !== cashBox?.id && account.active).map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field> : null}
+            <Field label="Nota" full><input value={cashBoxForm.notes} onChange={(e) => setCashBoxForm((form) => ({ ...form, notes: e.target.value }))} placeholder={cashBoxAction === 'deposit' ? 'Quién entregó el dinero' : 'Para qué lo tomó'} /></Field>
+          </div>
+          {cashBoxAction === 'deposit' ? <p className="sub" style={{ marginTop: 12 }}>Si este dinero ya está en una cuenta de la app, selecciónala como origen para evitar contarlo dos veces.</p> : null}
+          <div className="form-footer"><button className="button secondary" disabled={saving} onClick={() => setModal(null)}>Cancelar</button><button className="button primary" disabled={saving} onClick={saveCashBoxEntry}>{saving ? 'Guardando…' : 'Guardar'}</button></div>
         </ModalShell>
       ) : null}
 
@@ -779,13 +884,15 @@ export function DashboardClient({ email, name }: { email: string; name: string }
             <Field label="Contacto"><input value={loanForm.contact} onChange={(e) => setLoanForm((form) => ({ ...form, contact: e.target.value }))} placeholder="Teléfono o referencia" /></Field>
             <Field label="Capital prestado"><input type="number" min="0" inputMode="decimal" value={loanForm.principal} onChange={(e) => setLoanForm((form) => ({ ...form, principal: e.target.value }))} placeholder="0" /></Field>
             <Field label="Tasa de interés %"><input type="number" min="0" step="0.01" inputMode="decimal" value={loanForm.rate} onChange={(e) => setLoanForm((form) => ({ ...form, rate: e.target.value }))} placeholder="Ej. 2" /></Field>
-            <Field label="Cómo expresas la tasa"><select value={loanForm.rateType} onChange={(e) => setLoanForm((form) => ({ ...form, rateType: e.target.value as InterestRateType }))}><option value="monthly">Mensual</option><option value="annual_effective">Efectiva anual (E.A.)</option></select></Field>
-            <Field label="Periodicidad"><select value={loanForm.frequency} onChange={(e) => setLoanForm((form) => ({ ...form, frequency: e.target.value as LoanFrequency }))}><option value="monthly">Mensual</option><option value="biweekly">Quincenal</option><option value="weekly">Semanal</option></select></Field>
+            <Field label="Cómo se aplica el interés"><select value={loanForm.rateType} onChange={(e) => setLoanForm((form) => ({ ...form, rateType: e.target.value as InterestRateType }))}><option value="total">Sobre el capital, una sola vez</option><option value="monthly">Mensual sobre saldo</option><option value="annual_effective">Efectiva anual (E.A.) sobre saldo</option></select></Field>
+            <Field label="Periodicidad"><select value={loanForm.frequency} onChange={(e) => setLoanForm((form) => ({ ...form, frequency: e.target.value as LoanFrequency }))}><option value="monthly">Mensual</option><option value="biweekly">Cada 14 días</option><option value="weekly">Semanal</option></select></Field>
             <Field label="Número de cuotas"><input type="number" min="1" max="240" value={loanForm.installments} onChange={(e) => setLoanForm((form) => ({ ...form, installments: e.target.value }))} /></Field>
             <Field label="Fecha de entrega"><input type="date" value={loanForm.startDate} onChange={(e) => setLoanForm((form) => ({ ...form, startDate: e.target.value }))} /></Field>
             <Field label="Cuenta de origen"><select value={loanForm.accountId} onChange={(e) => setLoanForm((form) => ({ ...form, accountId: e.target.value }))}><option value="">{accounts.length ? 'Cuenta principal' : 'Sin asignar'}</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field>
             <Field label="Primera cuota"><input type="date" value={loanForm.firstDueDate} onChange={(e) => setLoanForm((form) => ({ ...form, firstDueDate: e.target.value }))} /></Field>
             <Field label="Descripción" full><input value={loanForm.description} onChange={(e) => setLoanForm((form) => ({ ...form, description: e.target.value }))} placeholder="Opcional" /></Field>
+            <p className="loan-interest-help">{loanForm.rateType === 'total' ? 'El porcentaje se aplica una sola vez al capital prestado y se reparte entre todas las cuotas. Las fechas y la periodicidad no aumentan el interés. Puede haber ajustes de centavos entre cuotas.' : 'El interés se calcula sobre el saldo pendiente en cada período. Este plan no incluye interés adicional por aplazar la primera cuota.'}</p>
+            {loanValidationError ? <p className="notice error loan-interest-help" role="alert">{loanValidationError}</p> : null}
             {loanPreview ? <div className="preview-box"><div><span>Cuota aproximada</span><strong>{formatCOP(loanPreview.fixedPayment)}</strong></div><div><span>Interés total</span><strong>{formatCOP(loanPreview.totalInterest)}</strong></div><div><span>Total a cobrar</span><strong>{formatCOP(loanPreview.totalToCollect)}</strong></div></div> : null}
           </div>
           <div className="form-footer"><button className="button secondary" onClick={() => setModal(null)}>Cancelar</button><button className="button primary" disabled={saving} onClick={saveLoan}>{saving ? 'Creando…' : 'Crear préstamo'}</button></div>
@@ -828,9 +935,9 @@ function RecentTransactions({ transactions, onViewAll }: { transactions: Transac
       <div className="quick-list">
         {transactions.length === 0 ? <div className="empty">Registra tu primer ingreso o gasto.</div> : transactions.map((tx) => (
           <div className="quick-item" key={tx.id}>
-            <div className="quick-icon">{kindMeta[tx.kind].label.slice(0, 2).toUpperCase()}</div>
+            <div className="quick-icon">{transactionLabel(tx).slice(0, 2).toUpperCase()}</div>
             <div><strong>{tx.description}</strong><span>{shortDate(tx.transaction_date)} · {tx.category}</span></div>
-            <div className={`quick-amount ${isCashIn(tx.kind) ? 'in' : 'out'}`}>{isCashIn(tx.kind) ? '+' : '-'} {formatCOP(tx.amount)}</div>
+            <div className={`quick-amount ${cashDirection(tx) === 'in' ? 'in' : 'out'}`}>{cashDirection(tx) === 'in' ? '+' : '-'} {formatCOP(tx.amount)}</div>
           </div>
         ))}
       </div>

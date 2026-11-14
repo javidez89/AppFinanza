@@ -1,5 +1,5 @@
 export type LoanFrequency = 'monthly' | 'biweekly' | 'weekly'
-export type InterestRateType = 'monthly' | 'annual_effective'
+export type InterestRateType = 'total' | 'monthly' | 'annual_effective'
 
 export type ScheduleRow = {
   installment_number: number
@@ -25,8 +25,10 @@ export function periodicRate(
   rateType: InterestRateType,
   frequency: LoanFrequency,
 ) {
-  const periodsPerYear = frequency === 'monthly' ? 12 : frequency === 'biweekly' ? 24 : 52
-  const rate = Math.max(ratePercent, 0) / 100
+  if (!Number.isFinite(ratePercent) || ratePercent < 0) throw new Error('La tasa debe ser un número mayor o igual que cero.')
+  if (rateType === 'total') throw new Error('El interés total no es una tasa periódica.')
+  const periodsPerYear = frequency === 'monthly' ? 12 : frequency === 'biweekly' ? 26 : 52
+  const rate = ratePercent / 100
   if (rateType === 'monthly') {
     if (frequency === 'monthly') return rate
     const annualFromMonthly = Math.pow(1 + rate, 12) - 1
@@ -38,13 +40,25 @@ export function periodicRate(
 function addDueDate(baseDate: Date, index: number, frequency: LoanFrequency) {
   const date = new Date(baseDate)
   if (frequency === 'monthly') {
-    date.setMonth(date.getMonth() + index)
+    const day = date.getUTCDate()
+    date.setUTCDate(1)
+    date.setUTCMonth(date.getUTCMonth() + index)
+    const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate()
+    date.setUTCDate(Math.min(day, lastDay))
   } else if (frequency === 'biweekly') {
-    date.setDate(date.getDate() + index * 14)
+    date.setUTCDate(date.getUTCDate() + index * 14)
   } else {
-    date.setDate(date.getDate() + index * 7)
+    date.setUTCDate(date.getUTCDate() + index * 7)
   }
   return date.toISOString().slice(0, 10)
+}
+
+function parseLoanDate(value: string) {
+  const date = new Date(`${value}T00:00:00Z`)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+    throw new Error('Ingresa una fecha válida para el préstamo.')
+  }
+  return date
 }
 
 export function buildLoanSchedule(params: {
@@ -54,9 +68,45 @@ export function buildLoanSchedule(params: {
   installments: number
   frequency: LoanFrequency
   firstDueDate: string
+  startDate?: string
 }) {
-  const principal = Math.max(params.principal, 0)
-  const installments = Math.max(Math.trunc(params.installments), 1)
+  const principal = roundMoney(params.principal)
+  const installments = params.installments
+  if (!Number.isFinite(principal) || principal <= 0) throw new Error('El capital debe ser mayor que cero.')
+  if (!Number.isFinite(params.interestRate) || params.interestRate < 0) throw new Error('La tasa debe ser un número mayor o igual que cero.')
+  if (!Number.isInteger(installments) || installments < 1 || installments > 240) throw new Error('Ingresa entre 1 y 240 cuotas enteras.')
+  if (!['total', 'monthly', 'annual_effective'].includes(params.interestRateType)) throw new Error('Selecciona una modalidad de interés válida.')
+  if (!['monthly', 'biweekly', 'weekly'].includes(params.frequency)) throw new Error('Selecciona una periodicidad válida.')
+  const firstDue = parseLoanDate(params.firstDueDate)
+  if (params.startDate && firstDue < parseLoanDate(params.startDate)) throw new Error('La primera cuota no puede ser anterior a la entrega.')
+
+  if (params.interestRateType === 'total') {
+    const principalCents = Math.round(principal * 100)
+    const interestCents = Math.round(principalCents * params.interestRate / 100)
+    if (!Number.isSafeInteger(principalCents + interestCents)) throw new Error('El importe supera el límite de cálculo permitido.')
+    // Allocate each component in cents; cumulative rounding preserves both totals.
+    const schedule: ScheduleRow[] = Array.from({ length: installments }, (_, index) => {
+      const number = index + 1
+      const principalPaid = Math.round(principalCents * (number / installments))
+      const principalBefore = Math.round(principalCents * (index / installments))
+      const interestPaid = Math.round(interestCents * (number / installments))
+      const interestBefore = Math.round(interestCents * (index / installments))
+      return {
+        installment_number: number,
+        due_date: addDueDate(firstDue, index, params.frequency),
+        principal_amount: (principalPaid - principalBefore) / 100,
+        interest_amount: (interestPaid - interestBefore) / 100,
+        total_amount: (principalPaid - principalBefore + interestPaid - interestBefore) / 100,
+        remaining_balance: (principalCents - principalPaid) / 100,
+      }
+    })
+    return {
+      fixedPayment: schedule[0].total_amount,
+      totalToCollect: (principalCents + interestCents) / 100,
+      totalInterest: interestCents / 100,
+      schedule,
+    }
+  }
   const rate = periodicRate(params.interestRate, params.interestRateType, params.frequency)
   const fixedPayment = rate === 0
     ? principal / installments
@@ -64,7 +114,6 @@ export function buildLoanSchedule(params: {
 
   let balance = principal
   const schedule: ScheduleRow[] = []
-  const firstDue = new Date(`${params.firstDueDate}T12:00:00`)
 
   for (let i = 1; i <= installments; i += 1) {
     const interest = rate === 0 ? 0 : balance * rate
