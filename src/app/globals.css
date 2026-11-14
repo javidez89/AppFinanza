@@ -120,6 +120,7 @@ a { color: inherit; }
 .button.teal { background:var(--teal); color:white; }
 .button.danger { background:#fff0f1; color:#a22a37; }
 .button.small { min-height:34px; padding:0 11px; font-size:11px; }
+.row-actions { display:flex; gap:6px; align-items:center; }
 
 .metrics { display:grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap:14px; }
 .metric-card { background:var(--card); border:1px solid #e8edf1; border-radius:18px; padding:18px; box-shadow:0 8px 25px rgba(18,50,74,.045); }

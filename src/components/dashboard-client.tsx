@@ -133,6 +133,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
   const supabase = useMemo(() => createClient(), [])
   const [view, setView] = useState<View>('dashboard')
   const [modal, setModal] = useState<Modal>(null)
+  const [editingMovement, setEditingMovement] = useState<Transaction | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
   const [loans, setLoans] = useState<Loan[]>([])
@@ -154,6 +155,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
   const [investmentForm, setInvestmentForm] = useState({
     institution: '', description: '', principal: '', annualRate: '', startDate: todayISO(), maturityDate: nextMonthISO(), accountId: '',
   })
+  const canManageCashflow = email.toLowerCase() === 'javidez89@gmail.com'
 
   const notify = useCallback((message: string) => {
     setToast(message)
@@ -294,6 +296,45 @@ export function DashboardClient({ email, name }: { email: string; name: string }
     setInstallPrompt(null)
   }
 
+  function closeMovementModal() {
+    setEditingMovement(null)
+    setModal(null)
+  }
+
+  function startEditingMovement(transaction: Transaction) {
+    if (!canManageCashflow || (transaction.kind !== 'income' && transaction.kind !== 'expense')) return
+    setEditingMovement(transaction)
+    setMovementForm({
+      description: transaction.description,
+      amount: String(transaction.amount),
+      category: transaction.category,
+      date: transaction.transaction_date,
+      notes: transaction.notes ?? '',
+      accountId: transaction.account_id ?? '',
+    })
+    setModal(transaction.kind)
+  }
+
+  async function deleteMovement(transaction: Transaction) {
+    if (!canManageCashflow || (transaction.kind !== 'income' && transaction.kind !== 'expense')) return
+    if (!window.confirm(`¿Eliminar este ${transaction.kind === 'income' ? 'ingreso' : 'gasto'}? Esta acción no se puede deshacer.`)) return
+    setSaving(true)
+    const { data, error } = await supabase
+      .from('transactions')
+      .delete()
+      .eq('id', transaction.id)
+      .eq('kind', transaction.kind)
+      .select('id')
+      .maybeSingle()
+    setSaving(false)
+    if (error || !data) {
+      notify(error?.message ?? 'No tienes permiso para eliminar este movimiento.')
+      return
+    }
+    notify(transaction.kind === 'income' ? 'Ingreso eliminado.' : 'Gasto eliminado.')
+    await loadData()
+  }
+
   async function saveMovement(kind: 'income' | 'expense') {
     const amount = Number(movementForm.amount)
     if (!movementForm.description.trim() || !amount || amount <= 0) {
@@ -301,7 +342,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
       return
     }
     setSaving(true)
-    const { error } = await supabase.from('transactions').insert({
+    const fields = {
       kind,
       description: movementForm.description.trim(),
       category: movementForm.category,
@@ -309,15 +350,19 @@ export function DashboardClient({ email, name }: { email: string; name: string }
       transaction_date: movementForm.date,
       notes: movementForm.notes.trim() || null,
       account_id: movementForm.accountId || accounts[0]?.id || null,
-    })
+    }
+    const result = editingMovement
+      ? await supabase.from('transactions').update(fields).eq('id', editingMovement.id).eq('kind', kind).select('id').maybeSingle()
+      : await supabase.from('transactions').insert(fields).select('id').maybeSingle()
     setSaving(false)
-    if (error) {
-      notify(error.message)
+    if (result.error || !result.data) {
+      notify(result.error?.message ?? (editingMovement ? 'No tienes permiso para editar este movimiento.' : 'No fue posible guardar el movimiento.'))
       return
     }
     setMovementForm({ description: '', amount: '', category: 'General', date: todayISO(), notes: '', accountId: '' })
-    setModal(null)
-    notify(kind === 'income' ? 'Ingreso registrado.' : 'Gasto registrado.')
+    const edited = Boolean(editingMovement)
+    closeMovementModal()
+    notify(kind === 'income' ? (edited ? 'Ingreso actualizado.' : 'Ingreso registrado.') : (edited ? 'Gasto actualizado.' : 'Gasto registrado.'))
     await loadData()
   }
 
@@ -626,15 +671,16 @@ export function DashboardClient({ email, name }: { email: string; name: string }
             </div>
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th>Categoría</th><th>Valor</th></tr></thead>
+                <thead><tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th>Categoría</th><th>Valor</th>{canManageCashflow ? <th aria-label="Acciones">Acciones</th> : null}</tr></thead>
                 <tbody>
-                  {transactions.length === 0 ? <tr><td colSpan={5} className="empty">Aún no hay movimientos.</td></tr> : transactions.map((tx) => (
+                  {transactions.length === 0 ? <tr><td colSpan={canManageCashflow ? 6 : 5} className="empty">Aún no hay movimientos.</td></tr> : transactions.map((tx) => (
                     <tr key={tx.id}>
                       <td>{shortDate(tx.transaction_date)}</td>
                       <td><span className={`badge ${isCashIn(tx.kind) ? 'paid' : 'pending'}`}>{kindMeta[tx.kind].label}</span></td>
                       <td><strong>{tx.description}</strong>{tx.notes ? <div className="sub">{tx.notes}</div> : null}</td>
                       <td>{tx.category}</td>
                       <td className={isCashIn(tx.kind) ? 'amount-positive' : 'amount-negative'}>{isCashIn(tx.kind) ? '+' : '-'} {formatCOP(tx.amount)}</td>
+                      {canManageCashflow ? <td>{tx.kind === 'income' || tx.kind === 'expense' ? <div className="row-actions"><button className="button secondary small" disabled={saving} onClick={() => startEditingMovement(tx)}>Editar</button><button className="button danger small" disabled={saving} onClick={() => void deleteMovement(tx)}>Eliminar</button></div> : <span className="sub">Automático</span>}</td> : null}
                     </tr>
                   ))}
                 </tbody>
@@ -713,7 +759,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
       <nav className="mobile-nav"><NavButtons mobile /></nav>
 
       {modal === 'income' || modal === 'expense' ? (
-        <ModalShell title={modal === 'income' ? 'Registrar ingreso' : 'Registrar gasto'} onClose={() => setModal(null)}>
+        <ModalShell title={editingMovement ? (modal === 'income' ? 'Editar ingreso' : 'Editar gasto') : (modal === 'income' ? 'Registrar ingreso' : 'Registrar gasto')} onClose={closeMovementModal}>
           <div className="form-grid">
             <Field label="Descripción" full><input autoFocus value={movementForm.description} onChange={(e) => setMovementForm((form) => ({ ...form, description: e.target.value }))} placeholder={modal === 'income' ? 'Ej. Pago de salario' : 'Ej. Mercado del mes'} /></Field>
             <Field label="Valor"><input type="number" min="0" inputMode="decimal" value={movementForm.amount} onChange={(e) => setMovementForm((form) => ({ ...form, amount: e.target.value }))} placeholder="0" /></Field>
@@ -722,7 +768,7 @@ export function DashboardClient({ email, name }: { email: string; name: string }
             <Field label="Cuenta"><select value={movementForm.accountId} onChange={(e) => setMovementForm((form) => ({ ...form, accountId: e.target.value }))}><option value="">{accounts.length ? 'Cuenta principal' : 'Sin asignar'}</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></Field>
             <Field label="Notas"><input value={movementForm.notes} onChange={(e) => setMovementForm((form) => ({ ...form, notes: e.target.value }))} placeholder="Opcional" /></Field>
           </div>
-          <div className="form-footer"><button className="button secondary" onClick={() => setModal(null)}>Cancelar</button><button className="button primary" disabled={saving} onClick={() => saveMovement(modal)}>{saving ? 'Guardando…' : 'Guardar'}</button></div>
+          <div className="form-footer"><button className="button secondary" onClick={closeMovementModal}>Cancelar</button><button className="button primary" disabled={saving} onClick={() => saveMovement(modal)}>{saving ? 'Guardando…' : editingMovement ? 'Guardar cambios' : 'Guardar'}</button></div>
         </ModalShell>
       ) : null}
 
